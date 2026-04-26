@@ -38,7 +38,7 @@ export function Sidebar() {
             to={to}
             end={to === '/'}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded text-xs tracking-widest transition-colors ${
+              `flex items-center gap-3 px-3 py-2 rounded-xl text-xs tracking-widest transition-colors ${
                 isActive
                   ? 'bg-nx-orange/10 text-nx-orange border border-nx-orange/20'
                   : 'text-nx-fg2 hover:text-nx-fg hover:bg-nx-dim'
@@ -54,7 +54,7 @@ export function Sidebar() {
       <div className="px-2 py-3 border-t border-nx-border">
         <button
           onClick={logout}
-          className="flex items-center gap-3 px-3 py-2 w-full rounded text-xs tracking-widest text-nx-fg2 hover:text-nx-red hover:bg-nx-red/5 transition-colors"
+          className="flex items-center gap-3 px-3 py-2 w-full rounded-xl text-xs tracking-widest text-nx-fg2 hover:text-nx-red hover:bg-nx-red/5 transition-colors"
         >
           <LogOut size={14} strokeWidth={1.5} />
           <span>TERMINATE SESSION</span>

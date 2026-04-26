@@ -25,10 +25,10 @@
 
 @layer components {
   .nx-card {
-    @apply bg-nx-bg3 border border-nx-border rounded-lg;
+    @apply bg-nx-bg3 border border-nx-border rounded-2xl;
   }
   .nx-btn {
-    @apply px-3 py-1.5 rounded text-sm font-mono font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-nx-orange;
+    @apply px-3 py-1.5 rounded-xl text-sm font-mono font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-nx-orange;
   }
   .nx-btn-primary {
     @apply nx-btn bg-nx-orange text-nx-bg hover:bg-nx-orange-lit;
@@ -40,15 +40,15 @@
     @apply nx-btn bg-transparent text-nx-red border border-nx-red hover:bg-nx-red hover:text-white;
   }
   .nx-input {
-    @apply bg-nx-bg2 border border-nx-border rounded px-3 py-2 text-sm text-nx-fg placeholder-nx-fg2 focus:outline-none focus:border-nx-orange transition-colors w-full;
+    @apply bg-nx-bg2 border border-nx-border rounded-xl px-3 py-2 text-sm text-nx-fg placeholder-nx-fg2 focus:outline-none focus:border-nx-orange transition-colors w-full;
   }
   .nx-badge-running {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-nx-green/10 text-nx-green border border-nx-green/20;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-nx-green/10 text-nx-green border border-nx-green/20;
   }
   .nx-badge-stopped {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-nx-red/10 text-nx-red border border-nx-red/20;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-nx-red/10 text-nx-red border border-nx-red/20;
   }
   .nx-badge-paused {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-nx-yellow/10 text-nx-yellow border border-nx-yellow/20;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-nx-yellow/10 text-nx-yellow border border-nx-yellow/20;
   }
 }
