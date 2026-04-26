@@ -206,6 +206,7 @@ _print "Patching ISO (preserving boot records)..."
 xorriso \
     -indev  "$DEBIAN_ISO" \
     -outdev "$FINAL" \
+    -return_with SORRY 0 \
     -boot_image any keep \
     -volid  "$ISO_VOLUME" \
     -update "$WORK_DIR/grub.cfg"    /boot/grub/grub.cfg \
