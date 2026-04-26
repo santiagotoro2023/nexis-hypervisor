@@ -21,7 +21,26 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-DEBIAN_BASE="https://cdimage.debian.org/debian-cd/current-oldstable/amd64/iso-cd"
+# Try several URL bases in order — whichever has a Debian 12 ISO wins
+_find_debian12_iso() {
+    for base in \
+        "https://cdimage.debian.org/debian-cd/current-oldstable/amd64/iso-cd" \
+        "https://cdimage.debian.org/cdimage/archive/latest-oldstable/amd64/iso-cd" \
+        "https://cdimage.debian.org/debian-cd/12.9.0/amd64/iso-cd" \
+        "https://cdimage.debian.org/debian-cd/12.8.0/amd64/iso-cd" \
+        "https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd"
+    do
+        local fname
+        fname=$(curl -sSL --max-time 10 "${base}/SHA256SUMS" 2>/dev/null \
+            | grep -oP 'debian-12[\d.]+-amd64-netinst\.iso' | head -1 || true)
+        if [[ -n "$fname" ]]; then
+            echo "${base}/${fname}"
+            return 0
+        fi
+    done
+    return 1
+}
+DEBIAN_ISO_URL=""
 
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
@@ -35,12 +54,11 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 DEBIAN_ISO="$WORK_DIR/debian-netinst.iso"
 if [[ ! -f "$DEBIAN_ISO" ]]; then
-    _print "Finding Debian 12 netinst filename…"
-    FNAME=$(curl -sSL "${DEBIAN_BASE}/SHA256SUMS" \
-        | grep -oP 'debian-12[\d.]+-amd64-netinst\.iso' | head -1)
-    [[ -z "$FNAME" ]] && _err "Could not find Debian 12 ISO at $DEBIAN_BASE"
-    _print "Downloading $FNAME…"
-    curl -fL "${DEBIAN_BASE}/${FNAME}" -o "$DEBIAN_ISO"
+    _print "Finding Debian 12 netinst ISO…"
+    DEBIAN_ISO_URL=$(_find_debian12_iso) \
+        || _err "Could not find Debian 12 netinst ISO from any mirror"
+    _print "Downloading: $DEBIAN_ISO_URL"
+    curl -fL "$DEBIAN_ISO_URL" -o "$DEBIAN_ISO"
     _ok "$FNAME ($(du -h "$DEBIAN_ISO" | cut -f1))"
 fi
 
