@@ -134,7 +134,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: debian:bookworm
-      options: --privileged
     needs: build-web
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +147,7 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update -qq
-          apt-get install -yq live-build debian-archive-keyring
+          apt-get install -yq xorriso python3 curl
 
       - name: Extract version
         id: ver
