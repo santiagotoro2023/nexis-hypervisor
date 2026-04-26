@@ -97,51 +97,22 @@ EOF
 # ── 4. Write preseed.cfg ──────────────────────────────────────────────────────
 
 cat > "$NEXIS_DIR/preseed.cfg" << 'EOF'
-# NeXiS Hypervisor preseed
+# NeXiS Hypervisor preseed — minimal, non-intrusive
 #
-# Philosophy: pre-fill sensible defaults but let the installer ask every
-# question normally. The user sees the full standard Debian installer flow.
-# Arrow keys, language selection, partitioning confirmation — all interactive.
-# Only the keyboard layout (Swiss German) and timezone are pre-selected.
+# Only pre-selects keyboard (Swiss German) and timezone.
+# Every other installer question appears and works normally.
+# The installer asks about language, disk, root password, user, packages, etc.
 
-# Swiss German keyboard layout — user can still change it on the keyboard screen
+# Swiss German keyboard — pre-selected, user can still change it
 d-i keyboard-configuration/xkb-keymap select ch
 d-i keyboard-configuration/layoutcode string ch
 
-# Default hostname — installer will ask, this is just the pre-filled value
-d-i netcfg/get_hostname string nexis-node
-d-i netcfg/get_domain string local
-
-# Swiss timezone — installer will ask for region/city, this pre-selects it
+# Switzerland timezone — pre-selected
 d-i clock-setup/utc boolean true
 d-i time/zone string Europe/Zurich
-d-i clock-setup/ntp boolean true
 
-# Mirror — use Debian's official servers (installer will ask country)
-d-i mirror/http/hostname string deb.debian.org
-d-i mirror/http/directory string /debian
-d-i mirror/http/proxy string
-
-# Partitioning — suggest guided LVM layout but the installer WILL ask for
-# confirmation before touching the disk. User sees and approves the layout.
-d-i partman-auto/method string lvm
-d-i partman-auto-lvm/guided_size string max
-d-i partman-auto/choose_recipe select atomic
-
-# Root account — enabled so you can SSH in after install
-d-i passwd/root-login boolean true
-d-i passwd/make-user boolean false
-
-# Extra packages on top of standard Debian — installer will ask about tasks
-d-i pkgsel/include string curl git python3 python3-pip python3-venv ca-certificates
-
-# GRUB bootloader
-d-i grub-installer/only_debian boolean true
-d-i grub-installer/bootdev string default
-
-# After installation: copy NeXiS scripts into the installed system.
-# nexis-install.service runs install.sh on first boot (requires internet).
-# nexis-firstboot.service runs the config TUI (hostname/network/controller).
+# After the user finishes the installation, copy NeXiS scripts into the
+# installed system. These set up the hypervisor stack on first boot.
 d-i preseed/late_command string \
     mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
     cp /cdrom/nexis/install.sh /target/opt/nexis-install.sh ; \
@@ -150,7 +121,6 @@ d-i preseed/late_command string \
     cp /cdrom/nexis/nexis-install.service /target/etc/systemd/system/ ; \
     cp /cdrom/nexis/nexis-firstboot.service /target/etc/systemd/system/ ; \
     in-target systemctl enable nexis-install.service nexis-firstboot.service
-d-i finish-install/reboot_in_progress note
 EOF
 
 # ── 5. Inject preseed into initrd (Debian wiki cpio-prepend method) ───────────
@@ -190,15 +160,15 @@ set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz nomodeset vga=788 quiet ---
+    linux   /install.amd/vmlinuz nomodeset ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [graphical]" {
-    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset vga=788 quiet ---
+    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [expert]" {
-    linux   /install.amd/vmlinuz priority=low nomodeset vga=788 ---
+    linux   /install.amd/vmlinuz priority=low nomodeset ---
     initrd  /install.amd/initrd.gz
 }
 EOF
@@ -219,15 +189,15 @@ default install
 label install
     menu label Install NeXiS Hypervisor ${VERSION}
     kernel /install.amd/vmlinuz
-    append nomodeset vga=788 initrd=/install.amd/initrd.gz quiet ---
+    append nomodeset initrd=/install.amd/initrd.gz ---
 label installgui
     menu label Install NeXiS Hypervisor ${VERSION}  [graphical]
     kernel /install.amd/vmlinuz
-    append DEBIAN_FRONTEND=gtk nomodeset vga=788 initrd=/install.amd/initrd.gz quiet ---
+    append DEBIAN_FRONTEND=gtk nomodeset initrd=/install.amd/initrd.gz ---
 label expert
     menu label Install NeXiS Hypervisor ${VERSION}  [expert]
     kernel /install.amd/vmlinuz
-    append priority=low nomodeset vga=788 initrd=/install.amd/initrd.gz ---
+    append priority=low nomodeset initrd=/install.amd/initrd.gz ---
 EOF
     _ok "syslinux txt.cfg patched"
 fi
