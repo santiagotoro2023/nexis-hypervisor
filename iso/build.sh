@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# NeXiS Hypervisor — Debian 12 ISO Builder
-# Produces a bootable ISO with a custom themed installer TUI (Proxmox/ESXi style).
-# Must run as root inside a Debian Bookworm environment (privileged container in CI).
+# NeXiS Hypervisor — ISO Builder
+#
+# Produces a bootable ISO with:
+#   - Custom GRUB boot menu  (NeXiS branding, dark/orange, installer only)
+#   - Calamares graphical installer  (fully themed: dark bg, #F87200 orange, logo)
+#   - Pre-installed NeXiS Hypervisor stack  (copied to disk via unpackfs)
+#   - Post-install firstboot TUI  (network / hostname / controller config)
+#
+# Must run as root inside a Debian Bookworm environment (privileged container).
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 BUILD_DIR="${SCRIPT_DIR}/.build"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
@@ -17,11 +24,13 @@ _err()   { printf '\033[38;5;196m  ✗\033[0m %s\n' "$1" >&2; exit 1; }
 [[ $EUID -ne 0 ]] && _err "ISO build must run as root."
 command -v lb &>/dev/null || apt-get install -yq live-build 2>/dev/null
 
-_print "NeXiS Hypervisor ${VERSION} — Building Installation ISO..."
+_print "NeXiS Hypervisor ${VERSION} — Building Calamares Installation ISO..."
 mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# ── live-build configuration ─────────────────────────────────────────────────
+# ── live-build base config ────────────────────────────────────────────────────
+# No debian-installer — Calamares handles everything.
+# The live squashfs IS the installed system (unpackfs copies it verbatim).
 
 lb config \
     --mode debian \
@@ -32,180 +41,252 @@ lb config \
     --iso-application "NeXiS Hypervisor ${VERSION}" \
     --iso-volume "${ISO_VOLUME}"
 
-# ── Package list (live environment only — minimal for running the installer) ──
+# ── Package list ──────────────────────────────────────────────────────────────
+# Everything in the live system ends up on the installed disk via unpackfs.
 
 mkdir -p config/package-lists
 cat > config/package-lists/nexis.list.chroot << 'EOF'
-# Runtime needed by the installer TUI
+# ── Virtualisation ─────────────────────────────────────────────────────────
+qemu-kvm
+libvirt-daemon-system
+libvirt-clients
+lxc
+# ── Web interface ──────────────────────────────────────────────────────────
+novnc
+websockify
+# ── Python ────────────────────────────────────────────────────────────────
 python3
 python3-pip
-# Disk utilities used by the installer
-parted
-debootstrap
-gdisk
-dosfstools
-e2fsprogs
-# Network
+python3-venv
+python3-dev
+libvirt-dev
+pkg-config
+build-essential
+# ── System ────────────────────────────────────────────────────────────────
+bridge-utils
+nftables
+openssh-server
 curl
-ca-certificates
 git
-# Misc
 jq
+htop
+vim-tiny
+sudo
+ca-certificates
+parted
+# ── Calamares installer ───────────────────────────────────────────────────
+calamares
+calamares-settings-debian
+# ── Minimal X11 + window manager for installer ────────────────────────────
+xorg
+openbox
+xinit
+xterm
+hsetroot
+# ── Font (JetBrains Mono via nerd-fonts-jetbrains-mono or ttf-jetbrains-mono)
+fonts-jetbrains-mono
 EOF
 
-# ── Preseed (not used for the live installer but kept for reference) ───────────
+# ── Chroot hook: build NeXiS and configure live environment ──────────────────
 
-mkdir -p config/preseed
-cp "$SCRIPT_DIR/config/preseed.cfg" config/preseed/nexis.cfg
+mkdir -p config/hooks/live
+cat > config/hooks/live/0100-nexis-build.hook.chroot << 'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
 
-# ── Include installer TUI ─────────────────────────────────────────────────────
+NEXIS_DIR="/opt/nexis-hypervisor"
+NEXIS_DATA="/etc/nexis-hypervisor"
 
-mkdir -p config/includes.chroot/usr/local/bin
-cp "$SCRIPT_DIR/installer/nexis-install.py" \
-   config/includes.chroot/usr/local/bin/nexis-install
-chmod +x config/includes.chroot/usr/local/bin/nexis-install
+echo "[nexis] Cloning NeXiS Hypervisor..."
+git clone --quiet --depth 1 \
+    https://github.com/santiagotoro2023/nexis-hypervisor \
+    "$NEXIS_DIR"
 
-# Also include the firstboot TUI so the installer can copy it to the target disk
-mkdir -p config/includes.chroot/opt/nexis-installer
-cp "$SCRIPT_DIR/firstboot-tui.py" config/includes.chroot/opt/nexis-installer/firstboot-tui.py
+echo "[nexis] Building Python environment..."
+python3 -m venv "$NEXIS_DIR/venv"
+"$NEXIS_DIR/venv/bin/pip" install -q --upgrade pip
+"$NEXIS_DIR/venv/bin/pip" install -q -r "$NEXIS_DIR/daemon/requirements.txt"
 
-# ── Auto-launch installer on first TTY ───────────────────────────────────────
-# Override getty@tty1 so the installer TUI appears immediately on boot,
-# exactly like Proxmox / ESXi — no login prompt, straight into the wizard.
+echo "[nexis] Building web UI..."
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - -s -- -y 2>/dev/null
+apt-get install -yq nodejs 2>/dev/null
+cd "$NEXIS_DIR/web" && npm install --silent && npm run build --silent
+echo "[nexis] Web UI built."
 
-mkdir -p config/includes.chroot/etc/systemd/system
+# ── Data directory
+mkdir -p "$NEXIS_DATA"
+chmod 700 "$NEXIS_DATA"
 
-# Drop-in that replaces the login prompt on tty1 with the NeXiS installer
-mkdir -p config/includes.chroot/etc/systemd/system/getty@tty1.service.d
-cat > config/includes.chroot/etc/systemd/system/getty@tty1.service.d/nexis-installer.conf << 'EOF'
+# ── NeXiS systemd service
+cp "$NEXIS_DIR/nexis-hypervisor.service" /etc/systemd/system/
+systemctl enable nexis-hypervisor 2>/dev/null || true
+
+# ── Firstboot TUI service (runs after installation, before web UI)
+cp /tmp/nexis-firstboot-tui.py /usr/local/bin/nexis-firstboot
+chmod +x /usr/local/bin/nexis-firstboot
+
+cat > /etc/systemd/system/nexis-firstboot.service << 'SVC'
+[Unit]
+Description=NeXiS Hypervisor First-Boot Configuration
+After=multi-user.target
+ConditionPathExists=!/etc/nexis-hypervisor/.firstboot-done
+
 [Service]
-ExecStart=
-ExecStart=-/usr/bin/python3 /usr/local/bin/nexis-install
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/nexis-firstboot
 StandardInput=tty
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
-Environment=TERM=linux
+
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl enable nexis-firstboot 2>/dev/null || true
+
+echo "[nexis] NeXiS stack installed and enabled."
+HOOK
+chmod +x config/hooks/live/0100-nexis-build.hook.chroot
+
+# ── Copy firstboot TUI into chroot via includes ──────────────────────────────
+
+mkdir -p config/includes.chroot/tmp
+cp "$SCRIPT_DIR/firstboot-tui.py" config/includes.chroot/tmp/nexis-firstboot-tui.py
+
+# ── Chroot hook: install Calamares branding and configure auto-launch ─────────
+
+cat > config/hooks/live/0200-calamares-setup.hook.chroot << 'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Install NeXiS branding into Calamares
+BRAND_DST="/usr/share/calamares/branding/nexis"
+mkdir -p "$BRAND_DST"
+cp /tmp/nexis-branding/* "$BRAND_DST/"
+
+# Convert SVG logo to PNG (try rsvg-convert, then inkscape, then python3)
+if command -v rsvg-convert &>/dev/null; then
+    rsvg-convert -w 128 -h 128 "$BRAND_DST/logo.svg" -o "$BRAND_DST/logo.png"
+elif command -v inkscape &>/dev/null; then
+    inkscape --export-filename="$BRAND_DST/logo.png" \
+             --export-width=128 --export-height=128 \
+             "$BRAND_DST/logo.svg" 2>/dev/null
+else
+    # Fallback: generate a minimal 128x128 orange square PNG via python3
+    python3 - << 'PYEOF'
+import struct, zlib
+def png(w, h, rows):
+    def chunk(t, d):
+        c = zlib.crc32(t+d) & 0xffffffff
+        return struct.pack('>I', len(d)) + t + d + struct.pack('>I', c)
+    raw = b''.join(b'\x00' + r for r in rows)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB',w,h,8,2,0,0,0)) + \
+           chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+W=H=128
+orange=(0xF8,0x72,0x00); dark=(0x08,0x08,0x07)
+rows=[bytes(sum([[*orange] if (20<=x<=108 and 20<=y<=108) else [*dark] for x in range(W)],[]))
+      for y in range(H)]
+open('/usr/share/calamares/branding/nexis/logo.png','wb').write(png(W,H,rows))
+PYEOF
+fi
+
+# Welcome background: same dark solid colour
+cp "$BRAND_DST/logo.png" "$BRAND_DST/welcome.png"
+
+# ── Apply the NeXiS QSS stylesheet as the Calamares global style
+mkdir -p /etc/calamares
+cp /tmp/nexis-calamares-settings.conf /etc/calamares/settings.conf
+mkdir -p /etc/calamares/modules
+cp /tmp/nexis-calamares-modules/* /etc/calamares/modules/ 2>/dev/null || true
+
+# ── Auto-launch: root auto-login → startx → openbox → calamares
+# Override getty@tty1 for root auto-login
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat > /etc/systemd/system/getty@tty1.service.d/calamares.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
 
-# ── GRUB theme hook (binary stage) ───────────────────────────────────────────
-# Injects the NeXiS color scheme and title into the live-boot GRUB menu.
+# Root's login shell starts X if on TTY1
+cat >> /root/.profile << 'PROFILE'
+# NeXiS live installer auto-start
+if [ -z "${DISPLAY:-}" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
+    exec startx /root/.xinitrc -- :0 vt1
+fi
+PROFILE
+
+# .xinitrc: dark background → openbox → Calamares
+cat > /root/.xinitrc << 'XINITRC'
+#!/bin/sh
+# NeXiS installer X session
+xsetroot -solid '#080807'
+hsetroot -solid '#080807' 2>/dev/null || true
+openbox &
+sleep 0.6
+exec calamares
+XINITRC
+chmod +x /root/.xinitrc
+
+echo "[nexis] Calamares configured."
+HOOK
+chmod +x config/hooks/live/0200-calamares-setup.hook.chroot
+
+# ── Copy Calamares branding and config via includes ───────────────────────────
+
+mkdir -p config/includes.chroot/tmp/nexis-branding
+cp "$SCRIPT_DIR/calamares/branding/nexis/"* \
+   config/includes.chroot/tmp/nexis-branding/
+
+cp "$SCRIPT_DIR/calamares/settings.conf" \
+   config/includes.chroot/tmp/nexis-calamares-settings.conf
+
+mkdir -p config/includes.chroot/tmp/nexis-calamares-modules
+cp "$SCRIPT_DIR/calamares/modules/"*.conf \
+   config/includes.chroot/tmp/nexis-calamares-modules/ 2>/dev/null || true
+
+# ── GRUB theme (binary hook) ──────────────────────────────────────────────────
+# Runs after the binary stage — rewrites grub.cfg with NeXiS branding
+# and removes the "Live system" entries, showing only the installer.
 
 mkdir -p config/hooks/normal
 cat > config/hooks/normal/9900-nexis-grub.hook.binary << 'HOOKEOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install NeXiS GRUB theme
-THEME_DIR="binary/boot/grub/themes/nexis"
-mkdir -p "$THEME_DIR"
-
-cat > "$THEME_DIR/theme.txt" << 'THEME'
-# NeXiS Hypervisor GRUB Theme
-title-text: ""
-desktop-color: "#080807"
-terminal-font: "Fixed Regular 12"
-
-+ label {
-    top = 3%; left = 0%; width = 100%; height = 6%
-    text = "NeXiS Hypervisor"
-    color = "#F87200"; font = "Fixed Bold 20"; align = "center"
-}
-+ label {
-    top = 10%; left = 0%; width = 100%; height = 4%
-    text = "Neural Execution and Cross-device Inference System"
-    color = "#887766"; font = "Fixed Regular 10"; align = "center"
-}
-+ boot_menu {
-    left = 12%; width = 76%; top = 22%; height = 52%
-    item_color = "#C4B898"
-    selected_item_color = "#F87200"
-    item_height = 18; item_padding = 6; item_spacing = 2
-    icon_width = 0; icon_height = 0
-}
-+ progress_bar {
-    id = "__timeout__"
-    left = 12%; width = 76%; top = 78%; height = 2%
-    fg_color = "#F87200"; bg_color = "#1A1A12"; border_color = "#2A2A1A"
-}
-+ label {
-    id = "__timeout__"
-    top = 82%; left = 0%; width = 100%; height = 4%
-    text = "Booting in %d seconds..."
-    color = "#2A2A1A"; font = "Fixed Regular 10"; align = "center"
-}
-+ label {
-    top = 93%; left = 0%; width = 100%; height = 4%
-    text = "Enter: install   e: edit entry   c: GRUB console"
-    color = "#2A2A1A"; font = "Fixed Regular 10"; align = "center"
-}
-THEME
-
-# Inject theme + colors into the generated GRUB config
-if [[ -f binary/boot/grub/grub.cfg ]]; then
-    PATCH=$(mktemp)
-    cat > "$PATCH" << 'GRUB'
+write_grub_cfg() {
+cat << 'GRUB'
 # NeXiS Hypervisor Boot Configuration
-insmod all_video
-insmod gfxterm
-insmod gfxmenu
-set gfxpayload=keep
+set timeout=8
+set default=0
 
-if loadfont /boot/grub/fonts/unicode.pf2; then
-    terminal_output gfxterm
-fi
-
-set theme=/boot/grub/themes/nexis/theme.txt
-load_env
-
-# Fallback console colors if gfxterm fails
-set color_normal=white/black
+# Color scheme  (GRUB standard colors — yellow is closest to #F87200 orange)
+set color_normal=light-gray/black
 set color_highlight=yellow/black
-set menu_color_normal=white/black
+set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
-GRUB
-    cat binary/boot/grub/grub.cfg >> "$PATCH"
-    mv "$PATCH" binary/boot/grub/grub.cfg
-fi
+menuentry "Install NeXiS Hypervisor" {
+    linux   /live/vmlinuz boot=live components quiet splash
+    initrd  /live/initrd.img
+}
 
-# Apply same theme to EFI GRUB if present
-if [[ -f binary/EFI/boot/grub.cfg ]]; then
-    PATCH=$(mktemp)
-    cat > "$PATCH" << 'GRUB'
-insmod all_video
-insmod gfxterm
-insmod gfxmenu
-set gfxpayload=keep
-if loadfont /boot/grub/fonts/unicode.pf2; then terminal_output gfxterm; fi
-set theme=/boot/grub/themes/nexis/theme.txt
-set color_normal=white/black
-set color_highlight=yellow/black
-set menu_color_normal=white/black
-set menu_color_highlight=yellow/black
+menuentry "Install NeXiS Hypervisor  [safe graphics]" {
+    linux   /live/vmlinuz boot=live components nomodeset quiet splash
+    initrd  /live/initrd.img
+}
 
+menuentry "Boot from existing OS" {
+    set root=(hd0)
+    chainloader +1
+}
 GRUB
-    cat binary/EFI/boot/grub.cfg >> "$PATCH"
-    mv "$PATCH" binary/EFI/boot/grub.cfg
-fi
+}
+
+[[ -f binary/boot/grub/grub.cfg ]] && write_grub_cfg > binary/boot/grub/grub.cfg
+[[ -f binary/EFI/boot/grub.cfg  ]] && write_grub_cfg > binary/EFI/boot/grub.cfg
 HOOKEOF
 chmod +x config/hooks/normal/9900-nexis-grub.hook.binary
-
-# ── GRUB menu title hook ───────────────────────────────────────────────────────
-# Rename menu entries from default live-build labels to NeXiS labels.
-
-cat > config/hooks/normal/9901-nexis-menu.hook.binary << HOOKEOF
-#!/usr/bin/env bash
-# Replace default Debian menu labels with NeXiS branding
-if [[ -f binary/boot/grub/grub.cfg ]]; then
-    sed -i \
-        -e 's/Debian GNU\/Linux/NeXiS Hypervisor ${VERSION}/g' \
-        -e 's/Live system/Install NeXiS Hypervisor/g' \
-        -e 's/menuentry "Debian/menuentry "NeXiS/g' \
-        binary/boot/grub/grub.cfg || true
-fi
-HOOKEOF
-chmod +x config/hooks/normal/9901-nexis-menu.hook.binary
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 

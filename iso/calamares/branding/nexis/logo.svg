@@ -1,0 +1,13 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <rect width="200" height="200" fill="#080807"/>
+  <!-- Triangle outline -->
+  <polygon points="100,18 185,172 15,172"
+           fill="none" stroke="#F87200" stroke-width="9"
+           stroke-linejoin="round"/>
+  <!-- Eye outer ring -->
+  <circle cx="100" cy="128" r="22" fill="none" stroke="#F87200" stroke-width="6"/>
+  <!-- Iris -->
+  <circle cx="100" cy="128" r="11" fill="#F87200"/>
+  <!-- Pupil -->
+  <circle cx="100" cy="128" r="5" fill="#080807"/>
+</svg>

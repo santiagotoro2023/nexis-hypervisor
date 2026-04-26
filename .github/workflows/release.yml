@@ -145,10 +145,12 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Install live-build
+      - name: Install live-build and tools
         run: |
           apt-get update -qq
-          apt-get install -yq live-build xorriso syslinux-utils debian-archive-keyring
+          apt-get install -yq \
+            live-build xorriso syslinux-utils debian-archive-keyring \
+            librsvg2-bin git curl
 
       - name: Extract version
         id: ver
