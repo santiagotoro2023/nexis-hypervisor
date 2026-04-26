@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# NeXiS Hypervisor — ISO Builder
+# NeXiS Hypervisor — ISO Builder v1.3.1
 #
-# Approach: minimal Debian live system (text-only, no X11) that auto-runs
-# a whiptail shell installer. No Debian netinst remastering. No framebuffer
-# complications. Works on any hardware including NVIDIA.
-#
-# Boot: GRUB → live kernel (nomodeset) → VGA text console → installer
-# Install: whiptail menus → debootstrap Debian → configure → NeXiS services
+# Minimal Debian live system → auto-starts whiptail installer on TTY1.
+# modprobe.blacklist=nouveau: prevents NVIDIA firmware errors.
+# text: forces text console, no display manager.
+# Systemd service replaces getty on TTY1 with the installer.
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
@@ -15,6 +13,7 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 BUILD_DIR="${SCRIPT_DIR}/.build"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
+KPARAMS="boot=live nomodeset text console=tty0 modprobe.blacklist=nouveau"
 
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
@@ -27,9 +26,6 @@ mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # ── live-build config ─────────────────────────────────────────────────────────
-# No Debian installer — our shell script IS the installer.
-# nomodeset: stops nouveau from loading (NVIDIA hardware safe).
-# console=tty0: ensures kernel output goes to the physical display.
 
 lb config \
     --mode debian \
@@ -38,40 +34,35 @@ lb config \
     --binary-images iso-hybrid \
     --debian-installer false \
     --apt-recommends false \
-    --bootappend-live "boot=live nomodeset console=tty0 consoleblank=0" \
+    --bootappend-live "$KPARAMS" \
     --iso-application "NeXiS Hypervisor ${VERSION}" \
-    --iso-volume "${ISO_VOLUME}"
+    --iso-volume "$ISO_VOLUME"
 
 # ── Package list ──────────────────────────────────────────────────────────────
-# Minimal set — everything the installer script needs to do its job.
 
 mkdir -p config/package-lists
 cat > config/package-lists/nexis.list.chroot << 'EOF'
-# Disk tools
+whiptail
+debootstrap
 parted
 gdisk
 dosfstools
 e2fsprogs
 util-linux
-# Debian installer
-debootstrap
-# Terminal UI
-whiptail
-# Network
 curl
 ca-certificates
 iproute2
 dhcpcd5
-# Python (for firstboot TUI)
 python3
-# Misc
-git
+grub-pc-bin
+grub-efi-amd64-bin
 EOF
 
-# ── Stage installer files via includes.chroot ─────────────────────────────────
+# ── Stage files ───────────────────────────────────────────────────────────────
 
 mkdir -p config/includes.chroot/usr/local/bin
 mkdir -p config/includes.chroot/opt/nexis-installer
+mkdir -p config/includes.chroot/etc/systemd/system
 
 cp "$SCRIPT_DIR/installer/nexis-install.sh" \
    config/includes.chroot/usr/local/bin/nexis-install
@@ -80,61 +71,98 @@ chmod +x config/includes.chroot/usr/local/bin/nexis-install
 cp "$REPO_DIR/install.sh"         config/includes.chroot/opt/nexis-installer/
 cp "$SCRIPT_DIR/firstboot-tui.py" config/includes.chroot/opt/nexis-installer/
 
-# ── Auto-run installer on TTY1 ────────────────────────────────────────────────
-# Override getty to autologin as root, then start the installer immediately.
+# ── Systemd service: installer runs directly on TTY1 ─────────────────────────
+# This is more reliable than .bash_profile — it starts before any getty
+# and takes over the console immediately.
 
-mkdir -p config/includes.chroot/etc/systemd/system/getty@tty1.service.d
-cat > config/includes.chroot/etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
+cat > config/includes.chroot/etc/systemd/system/nexis-installer.service << 'EOF'
+[Unit]
+Description=NeXiS Hypervisor Installer
+After=systemd-user-sessions.service plymouth-quit-wait.service
+After=rc-local.service
+Before=getty@tty1.service
+Conflicts=getty@tty1.service
+
 [Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+Type=idle
+ExecStart=/usr/local/bin/nexis-install
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-mkdir -p config/includes.chroot/root
-cat > config/includes.chroot/root/.bash_profile << 'EOF'
-# Auto-start installer on TTY1
-if [[ "$(tty)" == "/dev/tty1" ]] && [[ -x /usr/local/bin/nexis-install ]]; then
-    clear
-    exec /usr/local/bin/nexis-install
-fi
-EOF
+# ── Chroot hook: enable the installer service ─────────────────────────────────
 
-# ── GRUB boot menu (binary hook) ──────────────────────────────────────────────
-# Replace the default Debian live menu with a single NeXiS entry.
-# nomodeset is in --bootappend-live but we also set it explicitly here.
+mkdir -p config/hooks/live
+cat > config/hooks/live/0100-enable-installer.hook.chroot << 'HOOK'
+#!/bin/bash
+systemctl enable nexis-installer.service
+HOOK
+chmod +x config/hooks/live/0100-enable-installer.hook.chroot
+
+# ── Binary hook: patch ALL boot menus ────────────────────────────────────────
+# Patches every grub.cfg and syslinux live.cfg that live-build creates.
 
 mkdir -p config/hooks/normal
-cat > config/hooks/normal/9900-nexis-grub.hook.binary << 'HOOKEOF'
+cat > config/hooks/normal/9900-nexis-menus.hook.binary << HOOKEOF
 #!/usr/bin/env bash
-GRUB_CONTENT='set default=0
-set timeout=8
+KPARAMS="${KPARAMS}"
+VERSION="${VERSION}"
 
-menuentry "Install NeXiS Hypervisor" {
-    linux  /live/vmlinuz boot=live nomodeset console=tty0 consoleblank=0 ---
+# Patch every grub.cfg
+while IFS= read -r -d '' f; do
+    cat > "\$f" << GRUB
+set default=0
+set timeout=8
+menuentry "Install NeXiS Hypervisor \${VERSION}" {
+    linux  /live/vmlinuz \${KPARAMS} ---
     initrd /live/initrd.img
 }
-'
-for cfg in binary/boot/grub/grub.cfg binary/EFI/boot/grub.cfg; do
-    [[ -f "$cfg" ]] && printf '%s' "$GRUB_CONTENT" > "$cfg"
-done
+GRUB
+    echo "[nexis] patched \$f"
+done < <(find binary -name "grub.cfg" -print0 2>/dev/null)
+
+# Patch every syslinux live.cfg
+while IFS= read -r -d '' f; do
+    cat > "\$f" << SYSLINUX
+label live-amd64
+    menu label Install NeXiS Hypervisor \${VERSION}
+    linux /live/vmlinuz
+    append initrd=/live/initrd.img \${KPARAMS} ---
+SYSLINUX
+    echo "[nexis] patched \$f"
+done < <(find binary -name "live.cfg" -print0 2>/dev/null)
+
+# Patch isolinux.cfg title
+while IFS= read -r -d '' f; do
+    sed -i "s/menu title.*/menu title NeXiS Hypervisor \${VERSION}/" "\$f" 2>/dev/null || true
+    echo "[nexis] title patched \$f"
+done < <(find binary -name "isolinux.cfg" -print0 2>/dev/null)
+
 exit 0
 HOOKEOF
-chmod +x config/hooks/normal/9900-nexis-grub.hook.binary
+chmod +x config/hooks/normal/9900-nexis-menus.hook.binary
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-_print "Building live system (takes a few minutes)..."
+_print "Building live ISO..."
 lb build 2>&1 | tee "$OUTPUT_DIR/build.log"
 
 ISO=$(find "$BUILD_DIR" -maxdepth 1 -name "*.iso" | head -1)
-[[ -z "$ISO" ]] && _err "ISO not found after build."
+[[ -z "$ISO" ]] && _err "ISO not found."
 
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
 mv "$ISO" "$FINAL"
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"
 
-_ok "ISO: $FINAL"
-_ok "Size: $(du -h "$FINAL" | cut -f1)"
+_ok "ISO: $FINAL  ($(du -h "$FINAL" | cut -f1))"
 _ok "SHA256: $SHA"
-_print "Write: dd if=$(basename "$FINAL") of=/dev/sdX bs=4M status=progress && sync"
