@@ -20,8 +20,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-# Official Debian 12 netinst (amd64) — the installer only, no live system
-DEBIAN_ISO_URL="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12-netinst.iso"
+DEBIAN_BASE="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd"
 
 _print() { printf '\033[38;5;208m[nexis-iso]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ✓\033[0m %s\n' "$1"; }
@@ -38,8 +37,12 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 DEBIAN_ISO="${WORK_DIR}/debian-netinst.iso"
 if [[ ! -f "$DEBIAN_ISO" ]]; then
-    _print "Downloading Debian 12 netinst ISO..."
-    curl -fL --progress-bar "$DEBIAN_ISO_URL" -o "$DEBIAN_ISO"
+    _print "Finding current Debian 12 netinst filename..."
+    DEBIAN_FNAME=$(curl -fsSL "${DEBIAN_BASE}/SHA256SUMS" \
+        | grep -o 'debian-[0-9][0-9.]*-amd64-netinst\.iso' | head -1)
+    [[ -z "$DEBIAN_FNAME" ]] && _err "Could not determine Debian ISO filename from SHA256SUMS"
+    _print "Downloading ${DEBIAN_FNAME}..."
+    curl -fL --progress-bar "${DEBIAN_BASE}/${DEBIAN_FNAME}" -o "$DEBIAN_ISO"
     _ok "Downloaded: $(du -h "$DEBIAN_ISO" | cut -f1)"
 else
     _ok "Debian ISO already cached: $DEBIAN_ISO"
