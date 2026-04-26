@@ -98,31 +98,50 @@ EOF
 
 cat > "$NEXIS_DIR/preseed.cfg" << 'EOF'
 # NeXiS Hypervisor preseed
-d-i debian-installer/locale string en_US.UTF-8
-d-i keyboard-configuration/xkb-keymap select us
-d-i netcfg/choose_interface select auto
+#
+# Philosophy: pre-fill sensible defaults but let the installer ask every
+# question normally. The user sees the full standard Debian installer flow.
+# Arrow keys, language selection, partitioning confirmation — all interactive.
+# Only the keyboard layout (Swiss German) and timezone are pre-selected.
+
+# Swiss German keyboard layout — user can still change it on the keyboard screen
+d-i keyboard-configuration/xkb-keymap select ch
+d-i keyboard-configuration/layoutcode string ch
+
+# Default hostname — installer will ask, this is just the pre-filled value
 d-i netcfg/get_hostname string nexis-node
 d-i netcfg/get_domain string local
-d-i mirror/country string manual
+
+# Swiss timezone — installer will ask for region/city, this pre-selects it
+d-i clock-setup/utc boolean true
+d-i time/zone string Europe/Zurich
+d-i clock-setup/ntp boolean true
+
+# Mirror — use Debian's official servers (installer will ask country)
 d-i mirror/http/hostname string deb.debian.org
 d-i mirror/http/directory string /debian
 d-i mirror/http/proxy string
-d-i clock-setup/utc boolean true
-d-i time/zone string UTC
-d-i clock-setup/ntp boolean true
+
+# Partitioning — suggest guided LVM layout but the installer WILL ask for
+# confirmation before touching the disk. User sees and approves the layout.
 d-i partman-auto/method string lvm
 d-i partman-auto-lvm/guided_size string max
 d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
+
+# Root account — enabled so you can SSH in after install
 d-i passwd/root-login boolean true
 d-i passwd/make-user boolean false
-tasksel tasksel/first multiselect standard, ssh-server
+
+# Extra packages on top of standard Debian — installer will ask about tasks
 d-i pkgsel/include string curl git python3 python3-pip python3-venv ca-certificates
+
+# GRUB bootloader
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/bootdev string default
+
+# After installation: copy NeXiS scripts into the installed system.
+# nexis-install.service runs install.sh on first boot (requires internet).
+# nexis-firstboot.service runs the config TUI (hostname/network/controller).
 d-i preseed/late_command string \
     mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
     cp /cdrom/nexis/install.sh /target/opt/nexis-install.sh ; \
