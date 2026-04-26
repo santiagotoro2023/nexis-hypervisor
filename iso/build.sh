@@ -59,7 +59,7 @@ if [[ ! -f "$DEBIAN_ISO" ]]; then
         || _err "Could not find Debian 12 netinst ISO from any mirror"
     _print "Downloading: $DEBIAN_ISO_URL"
     curl -fL "$DEBIAN_ISO_URL" -o "$DEBIAN_ISO"
-    _ok "$FNAME ($(du -h "$DEBIAN_ISO" | cut -f1))"
+    _ok "Downloaded: $(du -h "$DEBIAN_ISO" | cut -f1)"
 fi
 
 # ── 2. Extract ISO ────────────────────────────────────────────────────────────
