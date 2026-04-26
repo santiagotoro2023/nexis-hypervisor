@@ -28,13 +28,10 @@ lb config \
     --binary-images iso-hybrid \
     --debian-installer live \
     --debian-installer-gui false \
-    --bootloader grub-efi \
     --apt-recommends false \
     --memtest none \
     --iso-application "Nexis Hypervisor ${VERSION}" \
-    --iso-volume "NEXIS-HV-${VERSION}" \
-    --image-name "nexis-hypervisor-${VERSION}" \
-    2>/dev/null
+    --iso-volume "NEXIS-HV-${VERSION}"
 
 # ── Package list ─────────────────────────────────────────────────────────────
 mkdir -p config/package-lists
