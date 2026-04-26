@@ -4,9 +4,9 @@
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
-OUTPUT_DIR="$(dirname "$0")/output"
-BUILD_DIR="$(dirname "$0")/.build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUTPUT_DIR="${SCRIPT_DIR}/output"
+BUILD_DIR="${SCRIPT_DIR}/.build"
 
 _print() { printf '\033[38;5;208m[nexis-iso]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ✓\033[0m %s\n' "$1"; }
