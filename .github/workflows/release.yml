@@ -1,0 +1,243 @@
+# Nexis Hypervisor — Release Pipeline
+# Builds: ISO image + .deb package
+# Triggered on: version tags (v1.0.0, v1.2.3, ...)
+# Uniform versioning with nexis-worker and nexis-controller.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+env:
+  NEXIS_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', inputs.version) }}
+
+jobs:
+  # ── Web UI Build ────────────────────────────────────────────────────────────
+  build-web:
+    name: Build Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install & build
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload web dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
+          retention-days: 1
+
+  # ── Debian Package ──────────────────────────────────────────────────────────
+  build-deb:
+    name: Build .deb Package
+    runs-on: ubuntu-latest
+    needs: build-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Extract version
+        id: ver
+        run: |
+          V="${{ env.NEXIS_VERSION }}"
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          PKG="nexis-hypervisor_${VERSION}_amd64"
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/opt/nexis-hypervisor/daemon"
+          mkdir -p "${PKG}/opt/nexis-hypervisor/web/dist"
+          mkdir -p "${PKG}/etc/systemd/system"
+          mkdir -p "${PKG}/etc/nexis-hypervisor"
+
+          # Copy files
+          cp -r daemon/ "${PKG}/opt/nexis-hypervisor/"
+          cp -r web/dist/ "${PKG}/opt/nexis-hypervisor/web/"
+          cp nexis-hypervisor.service "${PKG}/etc/systemd/system/"
+
+          # Control file
+          cat > "${PKG}/DEBIAN/control" << EOF
+          Package: nexis-hypervisor
+          Version: ${VERSION}
+          Section: admin
+          Priority: optional
+          Architecture: amd64
+          Depends: python3 (>= 3.11), python3-pip, python3-venv, libvirt-daemon-system, qemu-kvm, lxc, novnc
+          Maintainer: Nexis Project <noreply@nexis.local>
+          Description: Nexis Hypervisor — QEMU/KVM and LXC management web UI
+           Part of the Nexis ecosystem. Provides a web-based interface for
+           managing virtual machines and containers on a Linux host.
+          EOF
+
+          # Postinst: setup venv and enable service
+          cat > "${PKG}/DEBIAN/postinst" << 'EOF'
+          #!/bin/bash
+          set -e
+          python3 -m venv /opt/nexis-hypervisor/venv
+          /opt/nexis-hypervisor/venv/bin/pip install -q -r /opt/nexis-hypervisor/daemon/requirements.txt
+          systemctl daemon-reload
+          systemctl enable nexis-hypervisor
+          systemctl restart nexis-hypervisor || true
+          EOF
+          chmod 0755 "${PKG}/DEBIAN/postinst"
+
+          # Prerm: stop service
+          cat > "${PKG}/DEBIAN/prerm" << 'EOF'
+          #!/bin/bash
+          set -e
+          systemctl stop nexis-hypervisor || true
+          systemctl disable nexis-hypervisor || true
+          EOF
+          chmod 0755 "${PKG}/DEBIAN/prerm"
+
+          dpkg-deb --build "${PKG}"
+          echo "deb_file=${PKG}.deb" >> "$GITHUB_ENV"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexis-hypervisor-deb
+          path: '*.deb'
+          retention-days: 30
+
+  # ── ISO Build ───────────────────────────────────────────────────────────────
+  build-iso:
+    name: Build ISO
+    runs-on: ubuntu-latest
+    needs: build-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Install live-build
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yq live-build xorriso syslinux-utils
+
+      - name: Extract version
+        id: ver
+        run: |
+          V="${{ env.NEXIS_VERSION }}"
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ISO
+        env:
+          NEXIS_VERSION: ${{ steps.ver.outputs.version }}
+        run: sudo bash iso/build.sh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexis-hypervisor-iso
+          path: iso/output/*.iso
+          retention-days: 30
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexis-hypervisor-sha256
+          path: iso/output/SHA256SUMS
+          retention-days: 30
+
+  # ── GitHub Release ──────────────────────────────────────────────────────────
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [build-deb, build-iso]
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: nexis-hypervisor-deb
+          path: release/
+
+      - name: Download ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: nexis-hypervisor-iso
+          path: release/
+
+      - name: Download SHA256SUMS
+        uses: actions/download-artifact@v4
+        with:
+          name: nexis-hypervisor-sha256
+          path: release/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${{ env.NEXIS_VERSION }}"
+          cat > notes.md << EOF
+          ## Nexis Hypervisor ${VERSION}
+
+          ### Artefacts
+          | File | Description |
+          |------|-------------|
+          | \`nexis-hypervisor-${VERSION#v}-amd64.iso\` | Bootable installer ISO (Debian 12 base) |
+          | \`nexis-hypervisor_${VERSION#v}_amd64.deb\` | Debian package for existing Debian 12 systems |
+
+          ### Install via ISO
+          \`\`\`
+          dd if=nexis-hypervisor-${VERSION#v}-amd64.iso of=/dev/sdX bs=4M status=progress
+          \`\`\`
+
+          ### Install on existing Debian 12
+          \`\`\`bash
+          curl -sSL https://raw.githubusercontent.com/santiagotoro2023/nexis-hypervisor/main/install.sh | sudo bash
+          \`\`\`
+
+          Access the web UI at \`https://<host-ip>:8443\` and complete the setup wizard.
+
+          ---
+          Part of the [Nexis ecosystem](https://github.com/santiagotoro2023).
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Nexis Hypervisor ${{ env.NEXIS_VERSION }}"
+          body_path: notes.md
+          files: |
+            release/*.iso
+            release/*.deb
+            release/SHA256SUMS
+          draft: false
+          prerelease: ${{ contains(env.NEXIS_VERSION, '-') }}

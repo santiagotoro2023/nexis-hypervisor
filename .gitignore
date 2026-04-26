@@ -1,0 +1,30 @@
+# Node
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+daemon/venv/
+daemon/.venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime
+daemon/nexis-hypervisor.db
+daemon/cert.pem
+daemon/key.pem
+daemon/config.json
+daemon/.token
+
+# ISO build output
+iso/output/
+iso/.build/
+
+# OS
+.DS_Store
+*.swp
+*.swo

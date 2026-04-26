@@ -1,0 +1,23 @@
+[Unit]
+Description=Nexis Hypervisor Daemon
+Documentation=https://github.com/santiagotoro2023/nexis-hypervisor
+After=network.target libvirtd.service
+Wants=libvirtd.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nexis-hypervisor/daemon
+ExecStartPre=/opt/nexis-hypervisor/venv/bin/python -c "import db; db.init()"
+ExecStart=/opt/nexis-hypervisor/venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexis-hypervisor
+Environment=NEXIS_DATA=/etc/nexis-hypervisor
+Environment=NEXIS_ISO_DIR=/var/lib/libvirt/images
+Environment=NEXIS_PORT=8443
+
+[Install]
+WantedBy=multi-user.target

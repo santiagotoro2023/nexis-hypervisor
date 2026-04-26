@@ -1,0 +1,69 @@
+import { NavLink } from 'react-router-dom'
+import {
+  LayoutDashboard, Server, Box, HardDrive, Network,
+  LogOut, Zap, Activity,
+} from 'lucide-react'
+import { useAuth } from '../../hooks/useAuth'
+
+const NAV = [
+  { to: '/',           icon: LayoutDashboard, label: 'SYSTEM OVERVIEW' },
+  { to: '/vms',        icon: Server,          label: 'VIRTUAL INSTANCES' },
+  { to: '/containers', icon: Box,             label: 'CONTAINERS' },
+  { to: '/storage',    icon: HardDrive,       label: 'STORAGE' },
+  { to: '/network',    icon: Network,         label: 'NETWORK' },
+  { to: '/nexis',      icon: Zap,             label: 'CONTROLLER LINK' },
+]
+
+export function Sidebar() {
+  const { logout } = useAuth()
+
+  return (
+    <aside className="w-56 shrink-0 flex flex-col bg-nx-bg2 border-r border-nx-border h-screen sticky top-0">
+      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-nx-border">
+        <div className="w-7 h-7 flex items-center justify-center">
+          <svg viewBox="0 0 28 28" fill="none" className="w-7 h-7">
+            <path d="M4 4h6l4 8 4-8h6L14 24 4 4z" fill="#F87200"/>
+          </svg>
+        </div>
+        <div>
+          <div className="text-nx-fg text-sm font-semibold tracking-[0.2em]">NEXIS</div>
+          <div className="text-nx-fg2 text-[10px] tracking-[0.3em] uppercase">HYPERVISOR</div>
+        </div>
+      </div>
+
+      <nav className="flex-1 py-3 px-2 flex flex-col gap-0.5 overflow-y-auto">
+        {NAV.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2 rounded text-xs tracking-widest transition-colors ${
+                isActive
+                  ? 'bg-nx-orange/10 text-nx-orange border border-nx-orange/20'
+                  : 'text-nx-fg2 hover:text-nx-fg hover:bg-nx-dim'
+              }`
+            }
+          >
+            <Icon size={14} strokeWidth={1.5} />
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
+
+      <div className="px-2 py-3 border-t border-nx-border">
+        <button
+          onClick={logout}
+          className="flex items-center gap-3 px-3 py-2 w-full rounded text-xs tracking-widest text-nx-fg2 hover:text-nx-red hover:bg-nx-red/5 transition-colors"
+        >
+          <LogOut size={14} strokeWidth={1.5} />
+          <span>TERMINATE SESSION</span>
+        </button>
+        <div className="mt-2 px-3 flex items-center gap-1.5">
+          <Activity size={10} className="text-nx-fg2" />
+          <span className="text-nx-fg2 text-[10px] tracking-widest">NX-HV · BUILD 1.0.0</span>
+        </div>
+      </div>
+    </aside>
+  )
+}
