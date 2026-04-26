@@ -2,10 +2,13 @@
 # NeXiS Hypervisor — ISO Builder
 #
 # Produces a bootable ISO with:
-#   - Custom GRUB boot menu  (NeXiS branding, dark/orange, installer only)
-#   - Calamares graphical installer  (fully themed: dark bg, #F87200 orange, logo)
-#   - Pre-installed NeXiS Hypervisor stack  (copied to disk via unpackfs)
+#   - Custom GRUB boot menu  (NeXiS branding, installer-only)
+#   - Calamares graphical installer  (dark bg, #F87200 orange, logo)
+#   - Pre-installed NeXiS Hypervisor stack  (unpackfs — no downloads during install)
 #   - Post-install firstboot TUI  (network / hostname / controller config)
+#
+# The web UI dist and daemon are copied from the CI checkout — no network
+# access or nodejs/npm needed inside the chroot.
 #
 # Must run as root inside a Debian Bookworm environment (privileged container).
 set -euo pipefail
@@ -29,8 +32,6 @@ mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # ── live-build base config ────────────────────────────────────────────────────
-# No debian-installer — Calamares handles everything.
-# The live squashfs IS the installed system (unpackfs copies it verbatim).
 
 lb config \
     --mode debian \
@@ -42,19 +43,18 @@ lb config \
     --iso-volume "${ISO_VOLUME}"
 
 # ── Package list ──────────────────────────────────────────────────────────────
-# Everything in the live system ends up on the installed disk via unpackfs.
 
 mkdir -p config/package-lists
 cat > config/package-lists/nexis.list.chroot << 'EOF'
-# ── Virtualisation ─────────────────────────────────────────────────────────
+# Virtualisation
 qemu-kvm
 libvirt-daemon-system
 libvirt-clients
 lxc
-# ── Web interface ──────────────────────────────────────────────────────────
+# Web interface
 novnc
 websockify
-# ── Python ────────────────────────────────────────────────────────────────
+# Python
 python3
 python3-pip
 python3-venv
@@ -62,7 +62,7 @@ python3-dev
 libvirt-dev
 pkg-config
 build-essential
-# ── System ────────────────────────────────────────────────────────────────
+# System
 bridge-utils
 nftables
 openssh-server
@@ -74,57 +74,76 @@ vim-tiny
 sudo
 ca-certificates
 parted
-# ── Calamares installer ───────────────────────────────────────────────────
+# Calamares graphical installer
 calamares
 calamares-settings-debian
-# ── Minimal X11 + window manager for installer ────────────────────────────
+# Minimal X11 + window manager (removed from installed system post-install)
 xorg
 openbox
 xinit
 xterm
 hsetroot
-# ── Font (JetBrains Mono via nerd-fonts-jetbrains-mono or ttf-jetbrains-mono)
+# SVG → PNG conversion for logo
+librsvg2-bin
+# Font
 fonts-jetbrains-mono
 EOF
 
-# ── Chroot hook: build NeXiS and configure live environment ──────────────────
+# ── Stage NeXiS files via includes.chroot (no network in chroot) ─────────────
+# The CI checkout already has daemon/ and web/dist/ ready.
+
+NEXIS_CHROOT="config/includes.chroot/opt/nexis-hypervisor"
+mkdir -p "${NEXIS_CHROOT}/web"
+cp -r "$REPO_DIR/daemon"                "${NEXIS_CHROOT}/"
+cp -r "$REPO_DIR/web/dist"             "${NEXIS_CHROOT}/web/"
+cp    "$REPO_DIR/nexis-hypervisor.service" "${NEXIS_CHROOT}/"
+
+# ── Stage systemd service
+mkdir -p config/includes.chroot/etc/systemd/system
+cp "$REPO_DIR/nexis-hypervisor.service" \
+   config/includes.chroot/etc/systemd/system/nexis-hypervisor.service
+
+# ── Stage firstboot TUI
+mkdir -p config/includes.chroot/usr/local/bin
+cp "$SCRIPT_DIR/firstboot-tui.py" \
+   config/includes.chroot/usr/local/bin/nexis-firstboot
+chmod +x config/includes.chroot/usr/local/bin/nexis-firstboot
+
+# ── Stage Calamares branding + config
+mkdir -p config/includes.chroot/usr/share/calamares/branding/nexis
+cp "$SCRIPT_DIR/calamares/branding/nexis/"* \
+   config/includes.chroot/usr/share/calamares/branding/nexis/
+
+mkdir -p config/includes.chroot/etc/calamares/modules
+cp "$SCRIPT_DIR/calamares/settings.conf" \
+   config/includes.chroot/etc/calamares/settings.conf
+cp "$SCRIPT_DIR/calamares/modules/"*.conf \
+   config/includes.chroot/etc/calamares/modules/ 2>/dev/null || true
+
+# ── Chroot hook: pip install + systemd services + Calamares auto-launch ───────
 
 mkdir -p config/hooks/live
-cat > config/hooks/live/0100-nexis-build.hook.chroot << 'HOOK'
+cat > config/hooks/live/0100-nexis-setup.hook.chroot << 'HOOK'
 #!/usr/bin/env bash
 set -euo pipefail
 
 NEXIS_DIR="/opt/nexis-hypervisor"
 NEXIS_DATA="/etc/nexis-hypervisor"
 
-echo "[nexis] Cloning NeXiS Hypervisor..."
-git clone --quiet --depth 1 \
-    https://github.com/santiagotoro2023/nexis-hypervisor \
-    "$NEXIS_DIR"
-
-echo "[nexis] Building Python environment..."
+# Python venv + deps (no network for source/web — already staged)
+echo "[nexis] Setting up Python environment..."
 python3 -m venv "$NEXIS_DIR/venv"
 "$NEXIS_DIR/venv/bin/pip" install -q --upgrade pip
 "$NEXIS_DIR/venv/bin/pip" install -q -r "$NEXIS_DIR/daemon/requirements.txt"
 
-echo "[nexis] Building web UI..."
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash - -s -- -y 2>/dev/null
-apt-get install -yq nodejs 2>/dev/null
-cd "$NEXIS_DIR/web" && npm install --silent && npm run build --silent
-echo "[nexis] Web UI built."
-
-# ── Data directory
+# Data directory
 mkdir -p "$NEXIS_DATA"
 chmod 700 "$NEXIS_DATA"
 
-# ── NeXiS systemd service
-cp "$NEXIS_DIR/nexis-hypervisor.service" /etc/systemd/system/
+# Enable NeXiS daemon
 systemctl enable nexis-hypervisor 2>/dev/null || true
 
-# ── Firstboot TUI service (runs after installation, before web UI)
-cp /tmp/nexis-firstboot-tui.py /usr/local/bin/nexis-firstboot
-chmod +x /usr/local/bin/nexis-firstboot
-
+# Firstboot TUI service
 cat > /etc/systemd/system/nexis-firstboot.service << 'SVC'
 [Unit]
 Description=NeXiS Hypervisor First-Boot Configuration
@@ -143,64 +162,51 @@ TTYVHangup=yes
 WantedBy=multi-user.target
 SVC
 systemctl enable nexis-firstboot 2>/dev/null || true
+systemctl enable libvirtd ssh 2>/dev/null || true
 
-echo "[nexis] NeXiS stack installed and enabled."
-HOOK
-chmod +x config/hooks/live/0100-nexis-build.hook.chroot
-
-# ── Copy firstboot TUI into chroot via includes ──────────────────────────────
-
-mkdir -p config/includes.chroot/tmp
-cp "$SCRIPT_DIR/firstboot-tui.py" config/includes.chroot/tmp/nexis-firstboot-tui.py
-
-# ── Chroot hook: install Calamares branding and configure auto-launch ─────────
-
-cat > config/hooks/live/0200-calamares-setup.hook.chroot << 'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# ── Install NeXiS branding into Calamares
-BRAND_DST="/usr/share/calamares/branding/nexis"
-mkdir -p "$BRAND_DST"
-cp /tmp/nexis-branding/* "$BRAND_DST/"
-
-# Convert SVG logo to PNG (try rsvg-convert, then inkscape, then python3)
+echo "[nexis] Converting SVG logo to PNG..."
 if command -v rsvg-convert &>/dev/null; then
-    rsvg-convert -w 128 -h 128 "$BRAND_DST/logo.svg" -o "$BRAND_DST/logo.png"
-elif command -v inkscape &>/dev/null; then
-    inkscape --export-filename="$BRAND_DST/logo.png" \
-             --export-width=128 --export-height=128 \
-             "$BRAND_DST/logo.svg" 2>/dev/null
+    rsvg-convert -w 128 -h 128 \
+        /usr/share/calamares/branding/nexis/logo.svg \
+        -o /usr/share/calamares/branding/nexis/logo.png
 else
-    # Fallback: generate a minimal 128x128 orange square PNG via python3
+    # Fallback: generate a minimal orange/dark PNG via python3
     python3 - << 'PYEOF'
 import struct, zlib
-def png(w, h, rows):
-    def chunk(t, d):
-        c = zlib.crc32(t+d) & 0xffffffff
+def _png(w, h, rows):
+    def ch(t, d):
+        c = zlib.crc32(t + d) & 0xffffffff
         return struct.pack('>I', len(d)) + t + d + struct.pack('>I', c)
     raw = b''.join(b'\x00' + r for r in rows)
-    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB',w,h,8,2,0,0,0)) + \
-           chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
-W=H=128
-orange=(0xF8,0x72,0x00); dark=(0x08,0x08,0x07)
-rows=[bytes(sum([[*orange] if (20<=x<=108 and 20<=y<=108) else [*dark] for x in range(W)],[]))
-      for y in range(H)]
-open('/usr/share/calamares/branding/nexis/logo.png','wb').write(png(W,H,rows))
+    return (b'\x89PNG\r\n\x1a\n'
+            + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+            + ch(b'IDAT', zlib.compress(raw, 9))
+            + ch(b'IEND', b''))
+W = H = 128
+OR = bytes([0xF8, 0x72, 0x00])
+DK = bytes([0x08, 0x08, 0x07])
+rows = []
+for y in range(H):
+    row = bytearray()
+    for x in range(W):
+        cx, cy = x - W//2, y - H//2
+        # triangle: inside if above the two sides
+        in_tri = (y > H*0.15 and y < H*0.85
+                  and abs(cx) < (y - H*0.15) * 0.65)
+        # eye circle
+        in_eye = (cx*cx + (cy - H*0.15)*(cy - H*0.15)) < (H*0.14)**2
+        if in_tri or in_eye:
+            row += OR
+        else:
+            row += DK
+    rows.append(bytes(row))
+open('/usr/share/calamares/branding/nexis/logo.png', 'wb').write(_png(W, H, rows))
 PYEOF
 fi
+cp /usr/share/calamares/branding/nexis/logo.png \
+   /usr/share/calamares/branding/nexis/welcome.png
 
-# Welcome background: same dark solid colour
-cp "$BRAND_DST/logo.png" "$BRAND_DST/welcome.png"
-
-# ── Apply the NeXiS QSS stylesheet as the Calamares global style
-mkdir -p /etc/calamares
-cp /tmp/nexis-calamares-settings.conf /etc/calamares/settings.conf
-mkdir -p /etc/calamares/modules
-cp /tmp/nexis-calamares-modules/* /etc/calamares/modules/ 2>/dev/null || true
-
-# ── Auto-launch: root auto-login → startx → openbox → calamares
-# Override getty@tty1 for root auto-login
+# Auto-login root on TTY1 → startx → openbox → Calamares
 mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/calamares.conf << 'EOF'
 [Service]
@@ -208,18 +214,14 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
 
-# Root's login shell starts X if on TTY1
 cat >> /root/.profile << 'PROFILE'
-# NeXiS live installer auto-start
 if [ -z "${DISPLAY:-}" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
     exec startx /root/.xinitrc -- :0 vt1
 fi
 PROFILE
 
-# .xinitrc: dark background → openbox → Calamares
 cat > /root/.xinitrc << 'XINITRC'
 #!/bin/sh
-# NeXiS installer X session
 xsetroot -solid '#080807'
 hsetroot -solid '#080807' 2>/dev/null || true
 openbox &
@@ -228,26 +230,11 @@ exec calamares
 XINITRC
 chmod +x /root/.xinitrc
 
-echo "[nexis] Calamares configured."
+echo "[nexis] Setup complete."
 HOOK
-chmod +x config/hooks/live/0200-calamares-setup.hook.chroot
-
-# ── Copy Calamares branding and config via includes ───────────────────────────
-
-mkdir -p config/includes.chroot/tmp/nexis-branding
-cp "$SCRIPT_DIR/calamares/branding/nexis/"* \
-   config/includes.chroot/tmp/nexis-branding/
-
-cp "$SCRIPT_DIR/calamares/settings.conf" \
-   config/includes.chroot/tmp/nexis-calamares-settings.conf
-
-mkdir -p config/includes.chroot/tmp/nexis-calamares-modules
-cp "$SCRIPT_DIR/calamares/modules/"*.conf \
-   config/includes.chroot/tmp/nexis-calamares-modules/ 2>/dev/null || true
+chmod +x config/hooks/live/0100-nexis-setup.hook.chroot
 
 # ── GRUB theme (binary hook) ──────────────────────────────────────────────────
-# Runs after the binary stage — rewrites grub.cfg with NeXiS branding
-# and removes the "Live system" entries, showing only the installer.
 
 mkdir -p config/hooks/normal
 cat > config/hooks/normal/9900-nexis-grub.hook.binary << 'HOOKEOF'
@@ -260,7 +247,6 @@ cat << 'GRUB'
 set timeout=8
 set default=0
 
-# Color scheme  (GRUB standard colors — yellow is closest to #F87200 orange)
 set color_normal=light-gray/black
 set color_highlight=yellow/black
 set menu_color_normal=light-gray/black
