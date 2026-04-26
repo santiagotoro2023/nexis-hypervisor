@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
 # NeXiS Hypervisor — ISO Builder
-#
-# 1. Downloads the official Debian netinst ISO from cdimage.debian.org
-# 2. Injects preseed.cfg into the installer's initrd (cpio-prepend method
-#    from the Debian wiki) so it applies automatically on every boot entry
-# 3. Patches GRUB (UEFI) and syslinux (BIOS) menus:
-#      - Adds nomodeset  (prevents nouveau GPU hang on NVIDIA hardware)
-#      - Renames entries to "NeXiS Hypervisor vX.Y.Z"
-# 4. Adds /nexis/ directory with install.sh and service files
-# 5. Produces a valid hybrid ISO (BIOS + UEFI) using xorriso
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
@@ -27,37 +18,34 @@ apt-get install -yq xorriso cpio gzip curl 2>/dev/null | tail -1
 
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
-# ── 1. Download ───────────────────────────────────────────────────────────────
+# ── 1. Download official Debian netinst ISO ───────────────────────────────────
 
 DEBIAN_ISO="$WORK_DIR/debian-netinst.iso"
 if [[ ! -f "$DEBIAN_ISO" ]]; then
-    _print "Finding current Debian netinst filename…"
+    _print "Finding Debian netinst filename…"
     FNAME=$(curl -fsSL "${DEBIAN_BASE}/SHA256SUMS" \
-        | grep -oP 'debian-[\d.]++-amd64-netinst\.iso' | head -1)
+        | grep -oP 'debian-[\d.]+-amd64-netinst\.iso' | head -1)
     [[ -z "$FNAME" ]] && _err "Could not find Debian ISO in SHA256SUMS"
     _print "Downloading $FNAME …"
-    curl -fL --progress-bar "${DEBIAN_BASE}/${FNAME}" -o "$DEBIAN_ISO"
-    _ok "$FNAME ($(du -h "$DEBIAN_ISO" | cut -f1))"
+    curl -fL "${DEBIAN_BASE}/${FNAME}" -o "$DEBIAN_ISO"
+    _ok "$FNAME"
 fi
 
 # ── 2. Extract ISO ────────────────────────────────────────────────────────────
 
 ISO_SRC="$WORK_DIR/iso-src"
-_print "Extracting ISO…"
+_print "Extracting…"
 rm -rf "$ISO_SRC" && mkdir -p "$ISO_SRC"
 xorriso -osirrox on -indev "$DEBIAN_ISO" -extract / "$ISO_SRC/" 2>/dev/null
 chmod -R u+w "$ISO_SRC"
-_ok "Extracted to $ISO_SRC"
 
-# ── 3. Build /nexis/ directory (accessible as /cdrom/nexis/ during install) ───
+# ── 3. Add /nexis/ with NeXiS scripts ────────────────────────────────────────
 
-NEXIS_DIR="$ISO_SRC/nexis"
-mkdir -p "$NEXIS_DIR"
+mkdir -p "$ISO_SRC/nexis"
+cp "$REPO_DIR/install.sh"         "$ISO_SRC/nexis/"
+cp "$SCRIPT_DIR/firstboot-tui.py" "$ISO_SRC/nexis/"
 
-cp "$REPO_DIR/install.sh"         "$NEXIS_DIR/"
-cp "$SCRIPT_DIR/firstboot-tui.py" "$NEXIS_DIR/"
-
-cat > "$NEXIS_DIR/nexis-install.service" << 'EOF'
+cat > "$ISO_SRC/nexis/nexis-install.service" << 'EOF'
 [Unit]
 Description=NeXiS Hypervisor Installation
 After=network-online.target
@@ -75,7 +63,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-cat > "$NEXIS_DIR/nexis-firstboot.service" << 'EOF'
+cat > "$ISO_SRC/nexis/nexis-firstboot.service" << 'EOF'
 [Unit]
 Description=NeXiS Hypervisor First-Boot Configuration
 After=nexis-install.service
@@ -94,11 +82,15 @@ TTYVHangup=yes
 WantedBy=multi-user.target
 EOF
 
-# ── 4. Write preseed.cfg ──────────────────────────────────────────────────────
+# ── 4. Inject preseed into initrd (cpio-prepend, late_command only) ───────────
+# Only the late_command is preseeded — the installer asks EVERY question
+# interactively. No keyboard, no timezone, no partitioning pre-selected.
+# The cpio-prepend puts preseed.cfg at the root of the initrd; the Debian
+# installer finds it automatically without needing file= or auto= parameters.
 
-cat > "$NEXIS_DIR/preseed.cfg" << 'EOF'
-# NeXiS Hypervisor preseed
-# Only runs the late_command after installation — selects nothing automatically.
+cat > "$WORK_DIR/preseed.cfg" << 'EOF'
+# NeXiS Hypervisor preseed — late_command only, nothing pre-selected.
+# The installer asks every single question interactively.
 d-i preseed/late_command string \
     mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
     cp /cdrom/nexis/install.sh /target/opt/nexis-install.sh ; \
@@ -109,71 +101,78 @@ d-i preseed/late_command string \
     in-target systemctl enable nexis-install.service nexis-firstboot.service
 EOF
 
-# ── 5. Patch GRUB config (UEFI boot) ─────────────────────────────────────────
-# preseed loaded via file= kernel parameter — the installer still asks ALL
-# questions interactively; only the values listed in preseed.cfg are pre-filled.
-# No preseed in initrd (that causes auto-mode and skipped screens).
+INITRD="$ISO_SRC/install.amd/initrd.gz"
+[[ -f "$INITRD" ]] || _err "initrd not found at install.amd/initrd.gz"
+
+INJECT="$WORK_DIR/initrd-inject"
+rm -rf "$INJECT" && mkdir -p "$INJECT"
+cp "$WORK_DIR/preseed.cfg" "$INJECT/preseed.cfg"
+(cd "$INJECT" && echo preseed.cfg | cpio -o -H newc 2>/dev/null) \
+    > "$WORK_DIR/preseed.cpio"
+cat "$WORK_DIR/preseed.cpio" "$INITRD" > "$WORK_DIR/initrd-new.gz"
+cp "$WORK_DIR/initrd-new.gz" "$INITRD"
+_ok "Preseed (late_command only) injected into initrd"
+
+# ── 5. GRUB config — UEFI ────────────────────────────────────────────────────
+# timeout_style=menu  → always show the menu, never auto-boot silently
+# timeout=30          → 30-second countdown (press any key to stop)
+# nomodeset           → stop nouveau crashing on NVIDIA (firmware not needed)
+# NO nofb             → keep EFI framebuffer so the screen shows content
 
 GRUB_CFG="$ISO_SRC/boot/grub/grub.cfg"
-if [[ -f "$GRUB_CFG" ]]; then
-    cat > "$GRUB_CFG" << EOF
+[[ -f "$GRUB_CFG" ]] && cat > "$GRUB_CFG" << EOF
 # NeXiS Hypervisor ${VERSION}
+insmod all_video
+set timeout_style=menu
 set default=0
-set timeout=8
+set timeout=30
 set color_normal=light-gray/black
 set color_highlight=yellow/black
 set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg ---
+    linux   /install.amd/vmlinuz nomodeset consoleblank=0 ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [graphical]" {
-    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg ---
+    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset consoleblank=0 ---
     initrd  /install.amd/initrd.gz
 }
-menuentry "Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]" {
-    linux   /install.amd/vmlinuz nomodeset nofb consoleblank=0 ---
+menuentry "Vanilla Debian install (no NeXiS)" {
+    linux   /install.amd/vmlinuz nomodeset consoleblank=0 ---
     initrd  /install.amd/initrd.gz
 }
 EOF
-    _ok "GRUB config patched"
-fi
+_ok "GRUB config written"
 
 EFI_CFG="$ISO_SRC/EFI/boot/grub.cfg"
 [[ -f "$EFI_CFG" ]] && cp "$GRUB_CFG" "$EFI_CFG"
 
-# ── 6. Patch syslinux/isolinux config (BIOS boot) ────────────────────────────
+# ── 6. Syslinux — BIOS ───────────────────────────────────────────────────────
 
 TXT_CFG="$ISO_SRC/isolinux/txt.cfg"
-if [[ -f "$TXT_CFG" ]]; then
-    cat > "$TXT_CFG" << EOF
+[[ -f "$TXT_CFG" ]] && cat > "$TXT_CFG" << EOF
 default install
 label install
     menu label Install NeXiS Hypervisor ${VERSION}
     kernel /install.amd/vmlinuz
-    append nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
+    append nomodeset consoleblank=0 initrd=/install.amd/initrd.gz ---
 label installgui
     menu label Install NeXiS Hypervisor ${VERSION}  [graphical]
     kernel /install.amd/vmlinuz
-    append DEBIAN_FRONTEND=gtk nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
-label standard
-    menu label Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]
+    append DEBIAN_FRONTEND=gtk nomodeset consoleblank=0 initrd=/install.amd/initrd.gz ---
+label vanilla
+    menu label Vanilla Debian install (no NeXiS)
     kernel /install.amd/vmlinuz
-    append nomodeset nofb consoleblank=0 initrd=/install.amd/initrd.gz ---
+    append nomodeset consoleblank=0 initrd=/install.amd/initrd.gz ---
 EOF
-    _ok "syslinux txt.cfg patched"
-fi
 
-# gtk.cfg — graphical installer entries (if present)
 GTK_CFG="$ISO_SRC/isolinux/gtk.cfg"
 [[ -f "$GTK_CFG" ]] && cp "$TXT_CFG" "$GTK_CFG"
 
-# stdmenu.cfg — colors
 STDMENU="$ISO_SRC/isolinux/stdmenu.cfg"
-if [[ -f "$STDMENU" ]]; then
-    cat > "$STDMENU" << 'EOF'
+[[ -f "$STDMENU" ]] && cat > "$STDMENU" << 'EOF'
 menu color title    1;37;40 #fff87200 #ff080807 std
 menu color sel      7;37;40 #ff000000 #fff87200 std
 menu color unsel    37;40   #ffc4b898 #ff080807 std
@@ -181,33 +180,28 @@ menu color border   37;40   #ff2a2a1a #ff080807 std
 menu color hotkey   1;37;40 #fff87200 #ff080807 std
 menu color tabmsg   37;40   #ff887766 #ff080807 std
 EOF
-    _ok "syslinux colors patched"
-fi
 
-# menu.cfg — title
 MENU_CFG="$ISO_SRC/isolinux/menu.cfg"
-if [[ -f "$MENU_CFG" ]]; then
+[[ -f "$MENU_CFG" ]] && \
     sed -i "s/^menu title.*/menu title NeXiS Hypervisor ${VERSION}/" "$MENU_CFG"
-    _ok "syslinux title patched"
-fi
 
-# ── 8. Repack ISO ─────────────────────────────────────────────────────────────
-# Extract the MBR bootstrap record (first 432 bytes) from the original Debian
-# ISO — this is needed to make the USB stick bootable in legacy BIOS mode.
+# Increase syslinux timeout (unit = 1/10 sec; 300 = 30 seconds)
+ISOLINUX_CFG="$ISO_SRC/isolinux/isolinux.cfg"
+[[ -f "$ISOLINUX_CFG" ]] && \
+    sed -i 's/^timeout.*/timeout 300/' "$ISOLINUX_CFG" || true
 
-_print "Building ISO…"
+_ok "Syslinux config written"
+
+# ── 7. Repack ─────────────────────────────────────────────────────────────────
+
+_print "Repacking ISO…"
 dd if="$DEBIAN_ISO" bs=1 count=432 of="$WORK_DIR/mbr.bin" 2>/dev/null
 
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-# Find EFI image location — Debian stores it as part of the boot catalog
-EFI_IMG="$ISO_SRC/boot/grub/efi.img"
-[[ -f "$EFI_IMG" ]] || _err "EFI image not found: $EFI_IMG"
-
 xorriso -as mkisofs \
-    -r \
-    -V "$ISO_VOLUME" \
+    -r -V "$ISO_VOLUME" \
     -o "$FINAL" \
     -J -joliet-long \
     -isohybrid-mbr "$WORK_DIR/mbr.bin" \
@@ -223,7 +217,5 @@ xorriso -as mkisofs \
 
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"
-_ok "ISO: $FINAL"
-_ok "Size: $(du -h "$FINAL" | cut -f1)"
-_ok "SHA256: $SHA"
-_print "Write to USB:  dd if=$(basename "$FINAL") of=/dev/sdX bs=4M status=progress"
+_ok "ISO: $FINAL  ($(du -h "$FINAL" | cut -f1))"
+_print "Write: dd if=$(basename "$FINAL") of=/dev/sdX bs=4M status=progress"
