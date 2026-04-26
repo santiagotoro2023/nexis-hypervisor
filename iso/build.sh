@@ -21,9 +21,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-# Use Debian 12 (bookworm) — current stable with known-good ISO structure.
-# current-oldstable may point here once Debian 13 is official; adjust if needed.
-DEBIAN_BASE="https://cdimage.debian.org/debian-cd/12.10.0/amd64/iso-cd"
+DEBIAN_BASE="https://cdimage.debian.org/debian-cd/current-oldstable/amd64/iso-cd"
 
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
@@ -38,15 +36,9 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 DEBIAN_ISO="$WORK_DIR/debian-netinst.iso"
 if [[ ! -f "$DEBIAN_ISO" ]]; then
     _print "Finding Debian 12 netinst filename…"
-    FNAME=$(curl -fsSL "${DEBIAN_BASE}/SHA256SUMS" \
+    FNAME=$(curl -sSL "${DEBIAN_BASE}/SHA256SUMS" \
         | grep -oP 'debian-12[\d.]+-amd64-netinst\.iso' | head -1)
-    # Fallback: try current-oldstable if 12.10.0 doesn't exist yet
-    if [[ -z "$FNAME" ]]; then
-        DEBIAN_BASE="https://cdimage.debian.org/debian-cd/current-oldstable/amd64/iso-cd"
-        FNAME=$(curl -fsSL "${DEBIAN_BASE}/SHA256SUMS" \
-            | grep -oP 'debian-12[\d.]+-amd64-netinst\.iso' | head -1)
-    fi
-    [[ -z "$FNAME" ]] && _err "Could not find Debian 12 netinst ISO"
+    [[ -z "$FNAME" ]] && _err "Could not find Debian 12 ISO at $DEBIAN_BASE"
     _print "Downloading $FNAME…"
     curl -fL "${DEBIAN_BASE}/${FNAME}" -o "$DEBIAN_ISO"
     _ok "$FNAME ($(du -h "$DEBIAN_ISO" | cut -f1))"
