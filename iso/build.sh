@@ -97,22 +97,8 @@ EOF
 # ── 4. Write preseed.cfg ──────────────────────────────────────────────────────
 
 cat > "$NEXIS_DIR/preseed.cfg" << 'EOF'
-# NeXiS Hypervisor preseed — minimal, non-intrusive
-#
-# Only pre-selects keyboard (Swiss German) and timezone.
-# Every other installer question appears and works normally.
-# The installer asks about language, disk, root password, user, packages, etc.
-
-# Swiss German keyboard — pre-selected, user can still change it
-d-i keyboard-configuration/xkb-keymap select ch
-d-i keyboard-configuration/layoutcode string ch
-
-# Switzerland timezone — pre-selected
-d-i clock-setup/utc boolean true
-d-i time/zone string Europe/Zurich
-
-# After the user finishes the installation, copy NeXiS scripts into the
-# installed system. These set up the hypervisor stack on first boot.
+# NeXiS Hypervisor preseed
+# Only runs the late_command after installation — selects nothing automatically.
 d-i preseed/late_command string \
     mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
     cp /cdrom/nexis/install.sh /target/opt/nexis-install.sh ; \
@@ -140,15 +126,15 @@ set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz nomodeset file=/cdrom/nexis/preseed.cfg ---
+    linux   /install.amd/vmlinuz nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [graphical]" {
-    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset file=/cdrom/nexis/preseed.cfg ---
+    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]" {
-    linux   /install.amd/vmlinuz nomodeset ---
+    linux   /install.amd/vmlinuz nomodeset nofb consoleblank=0 ---
     initrd  /install.amd/initrd.gz
 }
 EOF
@@ -167,15 +153,15 @@ default install
 label install
     menu label Install NeXiS Hypervisor ${VERSION}
     kernel /install.amd/vmlinuz
-    append nomodeset file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
+    append nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
 label installgui
     menu label Install NeXiS Hypervisor ${VERSION}  [graphical]
     kernel /install.amd/vmlinuz
-    append DEBIAN_FRONTEND=gtk nomodeset file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
+    append DEBIAN_FRONTEND=gtk nomodeset nofb consoleblank=0 file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
 label standard
     menu label Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]
     kernel /install.amd/vmlinuz
-    append nomodeset initrd=/install.amd/initrd.gz ---
+    append nomodeset nofb consoleblank=0 initrd=/install.amd/initrd.gz ---
 EOF
     _ok "syslinux txt.cfg patched"
 fi
