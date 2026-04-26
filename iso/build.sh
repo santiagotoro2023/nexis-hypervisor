@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 # NeXiS Hypervisor — ISO Builder
 #
-# Produces a bootable ISO with:
-#   - Custom GRUB boot menu  (NeXiS branding, installer-only)
-#   - Calamares graphical installer  (dark bg, #F87200 orange, logo)
-#   - Pre-installed NeXiS Hypervisor stack  (unpackfs — no downloads during install)
-#   - Post-install firstboot TUI  (network / hostname / controller config)
+# Produces a bootable ISO using the standard Debian installer (d-i netinst).
+# No Calamares, no X11, no GPU driver requirements — works on any hardware.
 #
-# The web UI dist and daemon are copied from the CI checkout — no network
-# access or nodejs/npm needed inside the chroot.
+# Boot flow:
+#   GRUB (NeXiS-branded, dark/orange) → standard Debian installer (text + graphical)
+#   → late_command copies NeXiS stack → reboot → nexis-install.service → web UI
 #
 # Must run as root inside a Debian Bookworm environment (privileged container).
 set -euo pipefail
@@ -27,127 +25,106 @@ _err()   { printf '\033[38;5;196m  ✗\033[0m %s\n' "$1" >&2; exit 1; }
 [[ $EUID -ne 0 ]] && _err "ISO build must run as root."
 command -v lb &>/dev/null || apt-get install -yq live-build 2>/dev/null
 
-_print "NeXiS Hypervisor ${VERSION} — Building Calamares Installation ISO..."
+_print "NeXiS Hypervisor ${VERSION} — Building ISO (standard Debian installer)..."
 mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# ── live-build base config ────────────────────────────────────────────────────
+# ── live-build config ─────────────────────────────────────────────────────────
+# --debian-installer netinst: includes the standard Debian d-i at /install.amd/
+# The live squashfs is kept minimal — users go straight to the installer.
 
 lb config \
     --mode debian \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
+    --debian-installer netinst \
     --apt-recommends false \
     --iso-application "NeXiS Hypervisor ${VERSION}" \
     --iso-volume "${ISO_VOLUME}"
 
-# ── Package list ──────────────────────────────────────────────────────────────
+# ── Minimal live-system package list ─────────────────────────────────────────
+# The live system is not presented to the user — only the installer is.
 
 mkdir -p config/package-lists
 cat > config/package-lists/nexis.list.chroot << 'EOF'
-# Virtualisation
-qemu-kvm
-libvirt-daemon-system
-libvirt-clients
-lxc
-# Web interface
-novnc
-websockify
-# Python
-python3
-python3-pip
-python3-venv
-python3-dev
-libvirt-dev
-pkg-config
-build-essential
-# System
-bridge-utils
-nftables
-openssh-server
-curl
-git
-jq
-htop
-vim-tiny
-sudo
 ca-certificates
-parted
-# Calamares graphical installer
-calamares
-calamares-settings-debian
-# Minimal X11 + window manager (removed from installed system post-install)
-xorg
-openbox
-xinit
-xterm
-hsetroot
-# SVG → PNG conversion for logo
-librsvg2-bin
-# Font
-fonts-jetbrains-mono
 EOF
 
-# ── Stage NeXiS files via includes.chroot (no network in chroot) ─────────────
-# The CI checkout already has daemon/ and web/dist/ ready.
+# ── NeXiS files on the ISO binary ────────────────────────────────────────────
+# Placed at /nexis/ on the ISO root → accessible as /cdrom/nexis/ during d-i.
+# late_command copies them into the installed system without any internet access.
 
-NEXIS_CHROOT="config/includes.chroot/opt/nexis-hypervisor"
-mkdir -p "${NEXIS_CHROOT}/web"
-cp -r "$REPO_DIR/daemon"                "${NEXIS_CHROOT}/"
-cp -r "$REPO_DIR/web/dist"             "${NEXIS_CHROOT}/web/"
-cp    "$REPO_DIR/nexis-hypervisor.service" "${NEXIS_CHROOT}/"
+mkdir -p config/includes.binary/nexis
 
-# ── Stage systemd service
-mkdir -p config/includes.chroot/etc/systemd/system
-cp "$REPO_DIR/nexis-hypervisor.service" \
-   config/includes.chroot/etc/systemd/system/nexis-hypervisor.service
+# Preseed — loaded by the installer via GRUB kernel parameter
+cat > config/includes.binary/nexis/preseed.cfg << 'PRESEED'
+# NeXiS Hypervisor preseed
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i netcfg/choose_interface select auto
+d-i netcfg/get_hostname string nexis-node
+d-i netcfg/get_domain string local
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+d-i clock-setup/utc boolean true
+d-i time/zone string UTC
+d-i clock-setup/ntp boolean true
+d-i partman-auto/method string lvm
+d-i partman-auto-lvm/guided_size string max
+d-i partman-auto/choose_recipe select atomic
+d-i partman/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i passwd/root-login boolean true
+d-i passwd/make-user boolean false
+tasksel tasksel/first multiselect standard, ssh-server
+d-i pkgsel/include string curl git python3 python3-pip python3-venv ca-certificates
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/bootdev string default
+d-i preseed/late_command string \
+    mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
+    cp /cdrom/nexis/install.sh /target/opt/nexis-install.sh ; \
+    cp /cdrom/nexis/firstboot-tui.py /target/usr/local/bin/nexis-firstboot ; \
+    chmod +x /target/opt/nexis-install.sh /target/usr/local/bin/nexis-firstboot ; \
+    cp /cdrom/nexis/nexis-install.service /target/etc/systemd/system/ ; \
+    cp /cdrom/nexis/nexis-firstboot.service /target/etc/systemd/system/ ; \
+    in-target systemctl enable nexis-install.service nexis-firstboot.service
+d-i finish-install/reboot_in_progress note
+PRESEED
 
-# ── Stage firstboot TUI
-mkdir -p config/includes.chroot/usr/local/bin
-cp "$SCRIPT_DIR/firstboot-tui.py" \
-   config/includes.chroot/usr/local/bin/nexis-firstboot
-chmod +x config/includes.chroot/usr/local/bin/nexis-firstboot
+# Install script and firstboot TUI (copied to /target by late_command)
+cp "$REPO_DIR/install.sh"         config/includes.binary/nexis/
+cp "$SCRIPT_DIR/firstboot-tui.py" config/includes.binary/nexis/
 
-# ── Stage Calamares branding + config
-mkdir -p config/includes.chroot/usr/share/calamares/branding/nexis
-cp "$SCRIPT_DIR/calamares/branding/nexis/"* \
-   config/includes.chroot/usr/share/calamares/branding/nexis/
+# Systemd service: installs NeXiS stack on first boot (requires internet)
+cat > config/includes.binary/nexis/nexis-install.service << 'SVC'
+[Unit]
+Description=NeXiS Hypervisor Installation
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/nexis-hypervisor
 
-mkdir -p config/includes.chroot/etc/calamares/modules
-cp "$SCRIPT_DIR/calamares/settings.conf" \
-   config/includes.chroot/etc/calamares/settings.conf
-cp "$SCRIPT_DIR/calamares/modules/"*.conf \
-   config/includes.chroot/etc/calamares/modules/ 2>/dev/null || true
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/nexis-install.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
 
-# ── Chroot hook: pip install + systemd services + Calamares auto-launch ───────
+[Install]
+WantedBy=multi-user.target
+SVC
 
-mkdir -p config/hooks/live
-cat > config/hooks/live/0100-nexis-setup.hook.chroot << 'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-
-NEXIS_DIR="/opt/nexis-hypervisor"
-NEXIS_DATA="/etc/nexis-hypervisor"
-
-# Python venv + deps (no network for source/web — already staged)
-echo "[nexis] Setting up Python environment..."
-python3 -m venv "$NEXIS_DIR/venv"
-"$NEXIS_DIR/venv/bin/pip" install -q --upgrade pip
-"$NEXIS_DIR/venv/bin/pip" install -q -r "$NEXIS_DIR/daemon/requirements.txt"
-
-# Data directory
-mkdir -p "$NEXIS_DATA"
-chmod 700 "$NEXIS_DATA"
-
-# Enable NeXiS daemon
-systemctl enable nexis-hypervisor 2>/dev/null || true
-
-# Firstboot TUI service
-cat > /etc/systemd/system/nexis-firstboot.service << 'SVC'
+# Systemd service: firstboot TUI for network/hostname/controller config
+cat > config/includes.binary/nexis/nexis-firstboot.service << 'SVC'
 [Unit]
 Description=NeXiS Hypervisor First-Boot Configuration
-After=multi-user.target
+After=nexis-install.service
+Wants=nexis-install.service
 ConditionPathExists=!/etc/nexis-hypervisor/.firstboot-done
 
 [Service]
@@ -161,103 +138,40 @@ TTYVHangup=yes
 [Install]
 WantedBy=multi-user.target
 SVC
-systemctl enable nexis-firstboot 2>/dev/null || true
-systemctl enable libvirtd ssh 2>/dev/null || true
 
-echo "[nexis] Converting SVG logo to PNG..."
-if command -v rsvg-convert &>/dev/null; then
-    rsvg-convert -w 128 -h 128 \
-        /usr/share/calamares/branding/nexis/logo.svg \
-        -o /usr/share/calamares/branding/nexis/logo.png
-else
-    # Fallback: generate a minimal orange/dark PNG via python3
-    python3 - << 'PYEOF'
-import struct, zlib
-def _png(w, h, rows):
-    def ch(t, d):
-        c = zlib.crc32(t + d) & 0xffffffff
-        return struct.pack('>I', len(d)) + t + d + struct.pack('>I', c)
-    raw = b''.join(b'\x00' + r for r in rows)
-    return (b'\x89PNG\r\n\x1a\n'
-            + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
-            + ch(b'IDAT', zlib.compress(raw, 9))
-            + ch(b'IEND', b''))
-W = H = 128
-OR = bytes([0xF8, 0x72, 0x00])
-DK = bytes([0x08, 0x08, 0x07])
-rows = []
-for y in range(H):
-    row = bytearray()
-    for x in range(W):
-        cx, cy = x - W//2, y - H//2
-        # triangle: inside if above the two sides
-        in_tri = (y > H*0.15 and y < H*0.85
-                  and abs(cx) < (y - H*0.15) * 0.65)
-        # eye circle
-        in_eye = (cx*cx + (cy - H*0.15)*(cy - H*0.15)) < (H*0.14)**2
-        if in_tri or in_eye:
-            row += OR
-        else:
-            row += DK
-    rows.append(bytes(row))
-open('/usr/share/calamares/branding/nexis/logo.png', 'wb').write(_png(W, H, rows))
-PYEOF
-fi
-cp /usr/share/calamares/branding/nexis/logo.png \
-   /usr/share/calamares/branding/nexis/welcome.png
-
-# Auto-login root on TTY1 → startx → openbox → Calamares
-mkdir -p /etc/systemd/system/getty@tty1.service.d
-cat > /etc/systemd/system/getty@tty1.service.d/calamares.conf << 'EOF'
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
-EOF
-
-cat >> /root/.profile << 'PROFILE'
-if [ -z "${DISPLAY:-}" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
-    exec startx /root/.xinitrc -- :0 vt1
-fi
-PROFILE
-
-cat > /root/.xinitrc << 'XINITRC'
-#!/bin/sh
-xsetroot -solid '#080807'
-hsetroot -solid '#080807' 2>/dev/null || true
-openbox &
-sleep 0.6
-exec calamares
-XINITRC
-chmod +x /root/.xinitrc
-
-echo "[nexis] Setup complete."
-HOOK
-chmod +x config/hooks/live/0100-nexis-setup.hook.chroot
-
-# ── GRUB theme (binary hook) ──────────────────────────────────────────────────
+# ── GRUB binary hook — NeXiS-branded installer-only menu ─────────────────────
+# Replaces live-build's generated grub.cfg (which has Live/Installer/etc entries)
+# with a clean NeXiS menu pointing at the d-i kernel at /install.amd/.
+# Preseed is loaded automatically via auto=true file=/cdrom/nexis/preseed.cfg.
 
 mkdir -p config/hooks/normal
 cat > config/hooks/normal/9900-nexis-grub.hook.binary << 'HOOKEOF'
 #!/usr/bin/env bash
-# Do NOT use set -e here — the hook must not fail even if no grub.cfg exists.
+# No set -e — must not fail even if no grub.cfg exists.
 
 NEXIS_GRUB='# NeXiS Hypervisor Boot Configuration
 set timeout=8
 set default=0
 
+# GRUB standard colors (yellow = closest to #F87200 orange)
 set color_normal=light-gray/black
 set color_highlight=yellow/black
 set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor" {
-    linux   /live/vmlinuz boot=live components quiet splash
-    initrd  /live/initrd.img
+    linux   /install.amd/vmlinuz auto=true file=/cdrom/nexis/preseed.cfg vga=788 quiet ---
+    initrd  /install.amd/initrd.gz
 }
 
-menuentry "Install NeXiS Hypervisor  [safe graphics]" {
-    linux   /live/vmlinuz boot=live components nomodeset quiet splash
-    initrd  /live/initrd.img
+menuentry "Install NeXiS Hypervisor  [graphical]" {
+    linux   /install.amd/vmlinuz auto=true file=/cdrom/nexis/preseed.cfg vga=788 video=vesa:ywrap,mtrr DEBIAN_FRONTEND=gtk quiet ---
+    initrd  /install.amd/initrd.gz
+}
+
+menuentry "Install NeXiS Hypervisor  [expert / manual]" {
+    linux   /install.amd/vmlinuz priority=low vga=788 ---
+    initrd  /install.amd/initrd.gz
 }
 
 menuentry "Boot from existing OS" {
@@ -266,14 +180,12 @@ menuentry "Boot from existing OS" {
 }
 '
 
-# Patch every grub.cfg live-build created, regardless of exact location
 found=0
 while IFS= read -r -d '' cfg; do
     printf '%s' "$NEXIS_GRUB" > "$cfg"
-    echo "[nexis] Patched: $cfg"
+    echo "[nexis] Patched GRUB: $cfg"
     found=$((found + 1))
 done < <(find binary -name 'grub.cfg' -print0 2>/dev/null)
-
 echo "[nexis] Patched $found GRUB config(s)."
 exit 0
 HOOKEOF
@@ -281,7 +193,7 @@ chmod +x config/hooks/normal/9900-nexis-grub.hook.binary
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-_print "Running live-build (this takes several minutes)..."
+_print "Running live-build..."
 lb build 2>&1 | tee "$OUTPUT_DIR/build.log"
 
 ISO=$(find "$BUILD_DIR" -maxdepth 1 -name "*.iso" | head -1)
