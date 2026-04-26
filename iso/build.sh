@@ -123,35 +123,15 @@ d-i preseed/late_command string \
     in-target systemctl enable nexis-install.service nexis-firstboot.service
 EOF
 
-# ── 5. Inject preseed into initrd (Debian wiki cpio-prepend method) ───────────
-# The Debian installer kernel loads ALL cpio archives found at the start of
-# the initrd. Prepending a tiny archive containing preseed.cfg makes the
-# installer find and apply it automatically — no boot parameter needed.
-# This works regardless of which menu entry the user selects.
-
-INITRD="$ISO_SRC/install.amd/initrd.gz"
-[[ -f "$INITRD" ]] || _err "initrd not found: $INITRD"
-
-_print "Injecting preseed into initrd…"
-INJECT_DIR="$WORK_DIR/initrd-inject"
-rm -rf "$INJECT_DIR" && mkdir -p "$INJECT_DIR"
-cp "$NEXIS_DIR/preseed.cfg" "$INJECT_DIR/preseed.cfg"
-
-# Create uncompressed cpio containing just preseed.cfg
-(cd "$INJECT_DIR" && echo preseed.cfg | cpio -o -H newc 2>/dev/null) \
-    > "$WORK_DIR/preseed-prepend.cpio"
-
-# Prepend the cpio to the existing initrd
-cat "$WORK_DIR/preseed-prepend.cpio" "$INITRD" > "$WORK_DIR/initrd-patched.gz"
-cp "$WORK_DIR/initrd-patched.gz" "$INITRD"
-_ok "Preseed injected into initrd"
-
-# ── 6. Patch GRUB config (UEFI boot) ─────────────────────────────────────────
+# ── 5. Patch GRUB config (UEFI boot) ─────────────────────────────────────────
+# preseed loaded via file= kernel parameter — the installer still asks ALL
+# questions interactively; only the values listed in preseed.cfg are pre-filled.
+# No preseed in initrd (that causes auto-mode and skipped screens).
 
 GRUB_CFG="$ISO_SRC/boot/grub/grub.cfg"
 if [[ -f "$GRUB_CFG" ]]; then
     cat > "$GRUB_CFG" << EOF
-# NeXiS Hypervisor ${VERSION} — Boot Menu
+# NeXiS Hypervisor ${VERSION}
 set default=0
 set timeout=8
 set color_normal=light-gray/black
@@ -160,28 +140,26 @@ set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz nomodeset ---
+    linux   /install.amd/vmlinuz nomodeset file=/cdrom/nexis/preseed.cfg ---
     initrd  /install.amd/initrd.gz
 }
 menuentry "Install NeXiS Hypervisor ${VERSION}  [graphical]" {
-    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset ---
+    linux   /install.amd/vmlinuz DEBIAN_FRONTEND=gtk nomodeset file=/cdrom/nexis/preseed.cfg ---
     initrd  /install.amd/initrd.gz
 }
-menuentry "Install NeXiS Hypervisor ${VERSION}  [expert]" {
-    linux   /install.amd/vmlinuz priority=low nomodeset ---
+menuentry "Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]" {
+    linux   /install.amd/vmlinuz nomodeset ---
     initrd  /install.amd/initrd.gz
 }
 EOF
     _ok "GRUB config patched"
 fi
 
-# Some ISOs also have an EFI-specific grub.cfg
 EFI_CFG="$ISO_SRC/EFI/boot/grub.cfg"
 [[ -f "$EFI_CFG" ]] && cp "$GRUB_CFG" "$EFI_CFG"
 
-# ── 7. Patch syslinux/isolinux config (BIOS boot) ────────────────────────────
+# ── 6. Patch syslinux/isolinux config (BIOS boot) ────────────────────────────
 
-# txt.cfg — the actual menu entries
 TXT_CFG="$ISO_SRC/isolinux/txt.cfg"
 if [[ -f "$TXT_CFG" ]]; then
     cat > "$TXT_CFG" << EOF
@@ -189,15 +167,15 @@ default install
 label install
     menu label Install NeXiS Hypervisor ${VERSION}
     kernel /install.amd/vmlinuz
-    append nomodeset initrd=/install.amd/initrd.gz ---
+    append nomodeset file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
 label installgui
     menu label Install NeXiS Hypervisor ${VERSION}  [graphical]
     kernel /install.amd/vmlinuz
-    append DEBIAN_FRONTEND=gtk nomodeset initrd=/install.amd/initrd.gz ---
-label expert
-    menu label Install NeXiS Hypervisor ${VERSION}  [expert]
+    append DEBIAN_FRONTEND=gtk nomodeset file=/cdrom/nexis/preseed.cfg initrd=/install.amd/initrd.gz ---
+label standard
+    menu label Install NeXiS Hypervisor ${VERSION}  [no preseed / standard Debian]
     kernel /install.amd/vmlinuz
-    append priority=low nomodeset initrd=/install.amd/initrd.gz ---
+    append nomodeset initrd=/install.amd/initrd.gz ---
 EOF
     _ok "syslinux txt.cfg patched"
 fi
