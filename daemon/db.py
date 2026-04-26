@@ -17,28 +17,58 @@ def init():
     c = conn()
     c.executescript("""
         CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL
+            token       TEXT PRIMARY KEY,
+            username    TEXT NOT NULL DEFAULT 'creator',
+            created_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS local_users (
+            username    TEXT PRIMARY KEY,
+            hash        TEXT NOT NULL,
+            role        TEXT NOT NULL DEFAULT 'user',
+            created_at  TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS nexis_pairing (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            controller_url TEXT NOT NULL,
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            controller_url   TEXT NOT NULL,
             controller_token TEXT NOT NULL,
-            controller_name TEXT,
-            paired_at TEXT NOT NULL,
-            last_ping TEXT,
-            last_sync TEXT
+            controller_name  TEXT,
+            sso_enabled      INTEGER NOT NULL DEFAULT 1,
+            paired_at        TEXT NOT NULL,
+            last_ping        TEXT,
+            last_sync        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_nodes (
+            node_id    TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            url        TEXT NOT NULL,
+            role       TEXT NOT NULL DEFAULT 'worker',
+            joined_at  TEXT NOT NULL,
+            last_seen  TEXT
         );
 
         CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL,
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts     TEXT NOT NULL,
             action TEXT NOT NULL,
             detail TEXT,
             source TEXT
         );
     """)
+    # Seed default local user if absent
+    import hashlib
+    existing = c.execute('SELECT 1 FROM local_users WHERE username=?', ('creator',)).fetchone()
+    if not existing:
+        from datetime import datetime, timezone
+        c.execute(
+            'INSERT INTO local_users (username, hash, role, created_at) VALUES (?,?,?,?)',
+            ('creator',
+             hashlib.sha256('Asdf1234!'.encode()).hexdigest(),
+             'admin',
+             datetime.now(timezone.utc).isoformat()),
+        )
     c.commit()
 
 

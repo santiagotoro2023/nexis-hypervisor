@@ -6,11 +6,11 @@ export function useAuth() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function login(password: string) {
+  async function login(username: string, password: string) {
     setLoading(true)
     setError(null)
     try {
-      const { token } = await api.post<{ token: string }>('/auth/login', { password })
+      const { token } = await api.post<{ token: string }>('/auth/login', { username, password })
       setToken(token)
       setAuthed(true)
     } catch (e) {

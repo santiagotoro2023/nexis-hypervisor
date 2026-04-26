@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, ChevronRight, Shield, Server, Zap, Eye, EyeOff } from 'lucide-react'
+import { Check, ChevronRight, Shield, Server, Zap, Eye, EyeOff, Link } from 'lucide-react'
 import { NxSpinner } from '../common/NxSpinner'
 import { api, setToken } from '../../api/client'
 
@@ -9,29 +9,33 @@ interface Props {
 
 const STEPS = [
   { id: 'welcome',    label: 'INITIALISATION',   icon: Server },
-  { id: 'password',   label: 'ACCESS CONTROL',    icon: Shield },
-  { id: 'network',    label: 'NETWORK',           icon: Zap },
-  { id: 'complete',   label: 'READY',             icon: Check },
+  { id: 'controller', label: 'CONTROLLER',        icon: Link   },
+  { id: 'credentials', label: 'CREDENTIALS',      icon: Shield },
+  { id: 'network',    label: 'NETWORK',           icon: Zap    },
+  { id: 'complete',   label: 'READY',             icon: Check  },
 ]
 
 export function SetupWizard({ onComplete }: Props) {
   const [step, setStep] = useState(0)
+  const [controllerUrl, setControllerUrl] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
   const [hostname, setHostname] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  async function submitPassword() {
-    if (password.length < 8) { setError('Access code must be at least 8 characters.'); return }
-    if (password !== confirm) { setError('Access codes do not match.'); return }
+  async function submitCredentials() {
+    if (!username.trim()) { setError('Username is required.'); return }
+    if (password.length < 8) { setError('Password must be at least 8 characters.'); return }
     setError(null)
     setLoading(true)
     try {
-      const { token } = await api.post<{ token: string }>('/auth/setup', { password })
+      const payload: Record<string, string> = { username: username.trim(), password }
+      if (controllerUrl.trim()) payload.controller_url = controllerUrl.trim()
+      const { token } = await api.post<{ token: string }>('/auth/setup', payload)
       setToken(token)
-      setStep(2)
+      setStep(3)
     } catch (e) { setError((e as Error).message) }
     finally { setLoading(false) }
   }
@@ -40,8 +44,8 @@ export function SetupWizard({ onComplete }: Props) {
     setLoading(true)
     try {
       if (hostname.trim()) await api.post('/system/hostname', { hostname: hostname.trim() })
-      setStep(3)
-    } catch { setStep(3) }
+      setStep(4)
+    } catch { setStep(4) }
     finally { setLoading(false) }
   }
 
@@ -63,8 +67,10 @@ export function SetupWizard({ onComplete }: Props) {
         <div className="text-center mb-10">
           <svg viewBox="0 0 48 48" fill="none" className="w-10 h-10 mx-auto mb-5">
             <path d="M6 6h10l8 16 8-16h10L24 42 6 6z" fill="#F87200" />
+            <circle cx="24" cy="28" r="5" fill="#F87200" opacity="0.7"/>
+            <circle cx="24" cy="28" r="2.5" fill="#080807"/>
           </svg>
-          <div className="text-lg font-semibold text-nx-fg tracking-[0.4em] uppercase">Nexis</div>
+          <div className="text-lg font-semibold text-nx-fg tracking-[0.4em] uppercase">NeXiS</div>
           <div className="text-nx-fg2 text-[10px] tracking-[0.4em] uppercase mt-1">System Initialisation</div>
         </div>
 
@@ -96,17 +102,17 @@ export function SetupWizard({ onComplete }: Props) {
               <div>
                 <h2 className="text-sm font-semibold text-nx-fg tracking-[0.2em] uppercase">System Initialisation</h2>
                 <p className="text-nx-fg2 text-xs mt-3 leading-relaxed">
-                  This system has not been configured. Complete the following sequence to establish operational parameters.
+                  This node has not been configured. Complete the following sequence to establish operational parameters.
                 </p>
                 <p className="text-nx-fg2 text-xs mt-2 leading-relaxed">
-                  Access is restricted to authorised personnel. Configuration data is stored locally. No external network access is required.
+                  Connect to a NeXiS Controller to enable SSO across all devices, or configure local credentials only.
                 </p>
               </div>
               <div className="border border-nx-border rounded p-4 space-y-2">
                 {[
-                  'Establish administrator access credentials',
+                  'Link to NeXiS Controller (optional)',
+                  'Authenticate with NeXiS credentials',
                   'Configure network identity',
-                  'Verify system readiness',
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-3 text-xs text-nx-fg2">
                     <span className="text-nx-orange font-mono text-[10px]">0{i + 1}</span>
@@ -123,12 +129,68 @@ export function SetupWizard({ onComplete }: Props) {
           {step === 1 && (
             <div className="space-y-5">
               <div>
-                <h2 className="text-sm font-semibold text-nx-fg tracking-[0.2em] uppercase">Access Control</h2>
-                <p className="text-xs text-nx-fg2 mt-2">Establish the administrator access code for this system.</p>
+                <h2 className="text-sm font-semibold text-nx-fg tracking-[0.2em] uppercase">NeXiS Controller</h2>
+                <p className="text-xs text-nx-fg2 mt-2">
+                  Enter the URL of your NeXiS Controller to enable SSO. All NeXiS credentials will be validated centrally.
+                  Skip this step to use local authentication only.
+                </p>
+              </div>
+              <div>
+                <label className="block text-[10px] text-nx-fg2 tracking-widest uppercase mb-1.5">Controller URL</label>
+                <input
+                  className="nx-input font-mono"
+                  placeholder="https://192.168.1.x:8443"
+                  value={controllerUrl}
+                  onChange={e => setControllerUrl(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') setStep(2) }}
+                  autoFocus
+                />
+              </div>
+              <div className="border border-nx-border rounded p-4 text-xs text-nx-fg2 space-y-1.5">
+                <div className="text-[10px] text-nx-orange tracking-widest uppercase mb-2">SSO</div>
+                <div>When linked, this node delegates authentication to the NeXiS Controller.</div>
+                <div>Users created on the controller automatically have access to this node.</div>
+              </div>
+              <div className="flex gap-3">
+                <button className="nx-btn-ghost flex-1 tracking-wider text-xs" onClick={() => setStep(2)}>
+                  Skip
+                </button>
+                <button
+                  className="nx-btn-primary flex-1 tracking-[0.2em] text-xs uppercase"
+                  onClick={() => setStep(2)}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-5">
+              <div>
+                <h2 className="text-sm font-semibold text-nx-fg tracking-[0.2em] uppercase">Credentials</h2>
+                <p className="text-xs text-nx-fg2 mt-2">
+                  {controllerUrl.trim()
+                    ? 'Authenticate with your NeXiS credentials to register this node.'
+                    : 'Enter credentials for local administrator access. Default: creator / Asdf1234!'}
+                </p>
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[10px] text-nx-fg2 tracking-widest uppercase mb-1.5">Access Code</label>
+                  <label className="block text-[10px] text-nx-fg2 tracking-widest uppercase mb-1.5">Username</label>
+                  <input
+                    className="nx-input"
+                    placeholder="creator"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-nx-fg2 tracking-widest uppercase mb-1.5">Password</label>
                   <div className="relative">
                     <input
                       type={showPw ? 'text' : 'password'}
@@ -136,7 +198,7 @@ export function SetupWizard({ onComplete }: Props) {
                       placeholder="Minimum 8 characters"
                       value={password}
                       onChange={e => setPassword(e.target.value)}
-                      autoFocus
+                      onKeyDown={e => { if (e.key === 'Enter') submitCredentials() }}
                     />
                     <button
                       type="button"
@@ -146,17 +208,6 @@ export function SetupWizard({ onComplete }: Props) {
                       {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] text-nx-fg2 tracking-widest uppercase mb-1.5">Confirm Access Code</label>
-                  <input
-                    type={showPw ? 'text' : 'password'}
-                    className="nx-input"
-                    placeholder="Repeat access code"
-                    value={confirm}
-                    onChange={e => setConfirm(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') submitPassword() }}
-                  />
                 </div>
                 {password.length > 0 && (
                   <div className="flex gap-1">
@@ -174,16 +225,16 @@ export function SetupWizard({ onComplete }: Props) {
               {error && <div className="text-nx-red text-[10px] tracking-wider">{error}</div>}
               <button
                 className="nx-btn-primary w-full tracking-[0.2em] text-xs uppercase flex items-center justify-center gap-2"
-                onClick={submitPassword}
-                disabled={loading || !password || !confirm}
+                onClick={submitCredentials}
+                disabled={loading || !username.trim() || !password}
               >
                 {loading && <NxSpinner size={14} />}
-                Set Access Code
+                Authenticate
               </button>
             </div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <div className="space-y-5">
               <div>
                 <h2 className="text-sm font-semibold text-nx-fg tracking-[0.2em] uppercase">Network Identity</h2>
@@ -205,7 +256,7 @@ export function SetupWizard({ onComplete }: Props) {
                 <div>TLS certificate is self-signed. Accept on first access.</div>
               </div>
               <div className="flex gap-3">
-                <button className="nx-btn-ghost flex-1 tracking-wider text-xs" onClick={() => setStep(3)}>
+                <button className="nx-btn-ghost flex-1 tracking-wider text-xs" onClick={() => setStep(4)}>
                   Skip
                 </button>
                 <button
@@ -220,7 +271,7 @@ export function SetupWizard({ onComplete }: Props) {
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="space-y-6">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-full bg-nx-green/10 border border-nx-green/30 flex items-center justify-center mx-auto mb-4">
@@ -231,6 +282,7 @@ export function SetupWizard({ onComplete }: Props) {
               </div>
               <div className="border border-nx-border rounded p-4 text-xs space-y-2">
                 {[
+                  controllerUrl.trim() ? 'NeXiS Controller linked' : 'Local authentication configured',
                   'Administrator credentials established',
                   'Network identity configured',
                   'Virtualisation layer online',
@@ -255,7 +307,7 @@ export function SetupWizard({ onComplete }: Props) {
         </div>
 
         <div className="text-center text-[10px] text-nx-fg2 mt-6 tracking-widest uppercase font-mono">
-          Nexis Hypervisor · Build 1.0.0 · Local Configuration
+          NeXiS Hypervisor · Build 1.0.0 · Local Configuration
         </div>
       </div>
     </div>

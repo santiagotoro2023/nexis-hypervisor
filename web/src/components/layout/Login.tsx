@@ -2,22 +2,22 @@ import { useState } from 'react'
 import { NxSpinner } from '../common/NxSpinner'
 
 interface Props {
-  onLogin: (password: string) => Promise<void>
+  onLogin: (username: string, password: string) => Promise<void>
   error: string | null
   loading: boolean
 }
 
 export function Login({ onLogin, error, loading }: Props) {
+  const [username, setUsername] = useState('')
   const [pw, setPw] = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    await onLogin(pw)
+    await onLogin(username, pw)
   }
 
   return (
     <div className="min-h-screen bg-nx-bg flex items-center justify-center p-4">
-      {/* Subtle grid overlay */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.03]"
         style={{ backgroundImage: 'linear-gradient(#C4B898 1px, transparent 1px), linear-gradient(90deg, #C4B898 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
 
@@ -25,8 +25,10 @@ export function Login({ onLogin, error, loading }: Props) {
         <div className="text-center mb-10">
           <svg viewBox="0 0 48 48" fill="none" className="w-10 h-10 mx-auto mb-5">
             <path d="M6 6h10l8 16 8-16h10L24 42 6 6z" fill="#F87200"/>
+            <circle cx="24" cy="28" r="5" fill="#F87200" opacity="0.7"/>
+            <circle cx="24" cy="28" r="2.5" fill="#080807"/>
           </svg>
-          <div className="text-lg font-semibold text-nx-fg tracking-[0.4em] uppercase">Nexis</div>
+          <div className="text-lg font-semibold text-nx-fg tracking-[0.4em] uppercase">NeXiS</div>
           <div className="text-nx-fg2 text-[10px] tracking-[0.5em] uppercase mt-1">Hypervisor Control System</div>
         </div>
 
@@ -36,14 +38,27 @@ export function Login({ onLogin, error, loading }: Props) {
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Access Code</label>
+              <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Username</label>
+              <input
+                type="text"
+                className="nx-input"
+                placeholder="creator"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                autoFocus
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Password</label>
               <input
                 type="password"
                 className="nx-input tracking-widest"
                 placeholder="··········"
                 value={pw}
                 onChange={e => setPw(e.target.value)}
-                autoFocus
               />
             </div>
             {error && (
@@ -56,7 +71,7 @@ export function Login({ onLogin, error, loading }: Props) {
             <button
               type="submit"
               className="nx-btn-primary w-full flex items-center justify-center gap-2 tracking-[0.2em] text-xs uppercase"
-              disabled={loading || !pw.trim()}
+              disabled={loading || !username.trim() || !pw.trim()}
             >
               {loading && <NxSpinner size={14} />}
               {loading ? 'Verifying...' : 'Authenticate'}

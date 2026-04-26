@@ -1,5 +1,5 @@
 """
-Nexis Hypervisor Daemon
+NeXiS Hypervisor Daemon
 Entry point: TLS setup, auth middleware, route mounting, static file serving.
 """
 import os
@@ -17,12 +17,12 @@ from fastapi.staticfiles import StaticFiles
 
 import config
 import db
-from api import auth, vms, containers, storage, network, metrics, console, nexis, system
+from api import auth, vms, containers, storage, network, metrics, console, nexis, system, cluster
 
 config.load()
 db.init()
 
-app = FastAPI(title='Nexis Hypervisor', version='1.0.0', docs_url='/api/docs', redoc_url=None)
+app = FastAPI(title='NeXiS Hypervisor', version='1.0.0', docs_url='/api/docs', redoc_url=None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,6 +78,7 @@ app.include_router(metrics.router,    prefix='/api/metrics',    tags=['metrics']
 app.include_router(console.router,    prefix='/api',            tags=['console'])
 app.include_router(nexis.router,      prefix='/api/nexis',      tags=['nexis'])
 app.include_router(system.router,     prefix='/api/system',     tags=['system'])
+app.include_router(cluster.router,    prefix='/api/cluster',    tags=['cluster'])
 
 # Serve built frontend
 web_dist = config.WEB_DIR
