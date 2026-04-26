@@ -1,5 +1,5 @@
 [Unit]
-Description=Nexis Hypervisor Daemon
+Description=NeXiS Hypervisor Daemon
 Documentation=https://github.com/santiagotoro2023/nexis-hypervisor
 After=network.target libvirtd.service
 Wants=libvirtd.service

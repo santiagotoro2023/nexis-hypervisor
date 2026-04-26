@@ -26,7 +26,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -yq \
     qemu-kvm libvirt-daemon-system libvirt-clients \
-    lxc lxc-templates \
+    lxc \
     python3 python3-pip python3-venv python3-dev \
     libvirt-dev pkg-config build-essential \
     novnc websockify \
