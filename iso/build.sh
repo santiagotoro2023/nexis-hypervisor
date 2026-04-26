@@ -239,11 +239,9 @@ chmod +x config/hooks/live/0100-nexis-setup.hook.chroot
 mkdir -p config/hooks/normal
 cat > config/hooks/normal/9900-nexis-grub.hook.binary << 'HOOKEOF'
 #!/usr/bin/env bash
-set -euo pipefail
+# Do NOT use set -e here — the hook must not fail even if no grub.cfg exists.
 
-write_grub_cfg() {
-cat << 'GRUB'
-# NeXiS Hypervisor Boot Configuration
+NEXIS_GRUB='# NeXiS Hypervisor Boot Configuration
 set timeout=8
 set default=0
 
@@ -266,11 +264,18 @@ menuentry "Boot from existing OS" {
     set root=(hd0)
     chainloader +1
 }
-GRUB
-}
+'
 
-[[ -f binary/boot/grub/grub.cfg ]] && write_grub_cfg > binary/boot/grub/grub.cfg
-[[ -f binary/EFI/boot/grub.cfg  ]] && write_grub_cfg > binary/EFI/boot/grub.cfg
+# Patch every grub.cfg live-build created, regardless of exact location
+found=0
+while IFS= read -r -d '' cfg; do
+    printf '%s' "$NEXIS_GRUB" > "$cfg"
+    echo "[nexis] Patched: $cfg"
+    found=$((found + 1))
+done < <(find binary -name 'grub.cfg' -print0 2>/dev/null)
+
+echo "[nexis] Patched $found GRUB config(s)."
+exit 0
 HOOKEOF
 chmod +x config/hooks/normal/9900-nexis-grub.hook.binary
 
