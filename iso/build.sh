@@ -12,6 +12,8 @@ _print() { printf '\033[38;5;208m[nexis-iso]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ✓\033[0m %s\n' "$1"; }
 _err()   { printf '\033[38;5;196m  ✗\033[0m %s\n' "$1" >&2; exit 1; }
 
+ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
+
 if [[ $EUID -ne 0 ]]; then _err "ISO build must be run as root (or in Docker)."; fi
 
 command -v lb &>/dev/null || apt-get install -yq live-build 2>/dev/null
@@ -26,12 +28,9 @@ lb config \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
-    --debian-installer live \
-    --debian-installer-gui false \
     --apt-recommends false \
-    --memtest none \
     --iso-application "Nexis Hypervisor ${VERSION}" \
-    --iso-volume "NEXIS-HV-${VERSION}"
+    --iso-volume "${ISO_VOLUME}"
 
 # ── Package list ─────────────────────────────────────────────────────────────
 mkdir -p config/package-lists
@@ -41,7 +40,6 @@ qemu-kvm
 libvirt-daemon-system
 libvirt-clients
 lxc
-lxc-templates
 # Web interface
 novnc
 websockify
