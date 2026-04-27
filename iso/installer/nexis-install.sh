@@ -334,7 +334,7 @@ printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/main\nhttps://dl-cdn
 apk --root /mnt --initdb add --quiet \
     alpine-base linux-lts linux-firmware openrc \
     grub grub-efi efibootmgr openssh chrony \
-    kbd-bkeymaps python3 py3-pip curl git sudo \
+    kbd-bkeymaps kmod python3 py3-pip curl git sudo \
     >>"$LOG" 2>&1 || { _err "Package install failed — check internet. Log: $LOG"; sleep 10; exit 1; }
 
 step 6 "Configuring system..."
@@ -363,6 +363,9 @@ chroot /mnt ssh-keygen -A >&3 2>&3 || true
 chroot /mnt rc-update add sshd default >&3 2>&3 || true
 chroot /mnt rc-update add networking default >&3 2>&3 || true
 chroot /mnt rc-update add chronyd default >&3 2>&3 || true
+# hwclock races with RTC device init on kernel 6.18+ in VMs and hangs boot.
+# chrony handles time sync via NTP once network is up — hwclock not needed.
+chroot /mnt rc-update del hwclock boot >&3 2>&3 || true
 
 # Keyboard: Alpine uses the 'loadkmap' OpenRC service (from busybox-openrc,
 # included in alpine-base). Config is a full path to the .bmap.gz file.
