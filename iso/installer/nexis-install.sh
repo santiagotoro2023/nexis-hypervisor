@@ -3,6 +3,10 @@
 # Pure shell TUI — no external packages needed. Runs immediately at boot.
 set -e
 
+# Silence kernel messages on this console so PCIe/PCI noise doesn't flood the UI.
+# Errors still go to /tmp/nexis-install.log via fd3.
+dmesg -n 1 2>/dev/null || true
+
 OR='\033[1;33m'   # bright yellow  → orange on VGA console
 DIM='\033[2m'
 RST='\033[0m'
@@ -56,9 +60,8 @@ done
 
 # On Alpine, mdev -s rescans sysfs so the kernel registers new devices in
 # /sys/class/net. Without this, VMware/bare-metal NICs can stay invisible
-# even after their module loads. PCI rescan forces the bus to re-probe.
+# even after their module loads.
 mdev -s 2>/dev/null || true
-echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
 
 # Poll for any non-loopback interface to appear (up to 15 s)
 _waited=0

@@ -140,7 +140,7 @@ _ok "/nexis/ staged on ISO"
 # virtio_pci MUST be in this list for VMs — without it the VirtIO PCI bus
 # is never scanned and virtio_net/virtio_blk are never registered.
 # ahci,sd-mod,nvme cover common bare-metal disk controllers.
-KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,e1000,e1000e,r8169,8139too,igb,vmxnet3,pcnet32,ahci,nvme nomodeset alpine_dev=autodetect"
+KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,e1000,e1000e,r8169,8139too,igb,vmxnet3,pcnet32,ahci,nvme nomodeset quiet alpine_dev=autodetect"
 
 for grub_cfg in \
     "$ISO_SRC/boot/grub/grub.cfg" \
