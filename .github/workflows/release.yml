@@ -158,7 +158,17 @@ jobs:
       - name: Build ISO
         env:
           NEXIS_VERSION: ${{ steps.ver.outputs.version }}
-        run: sudo -E bash iso/build.sh
+        run: |
+          sudo -E bash iso/build.sh 2>&1 | tee /tmp/nexis-build.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload build log (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-iso-log
+          path: /tmp/nexis-build.log
+          retention-days: 7
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
