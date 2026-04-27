@@ -50,10 +50,10 @@ _confirm() {
 
 # Load common NIC kernel modules (udev may not have loaded them yet)
 for _mod in virtio_net virtio_pci e1000 e1000e r8169 8139too vmxnet3 \
-            bnx2 tg3 igb ixgbe mlx5_core be2net; do
+            bnx2 tg3 igb ixgbe mlx5_core be2net pcnet32; do
     modprobe "$_mod" 2>/dev/null || true
 done
-sleep 2  # give udev time to create /sys/class/net entries
+sleep 5  # give udev time to create /sys/class/net entries
 
 # Bring up every interface and run DHCP on each (udhcpc needs -i IFACE)
 for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
@@ -88,41 +88,42 @@ _ask "  Select [1-9,0, default=1]: "
 read -r KB_NUM
 
 case "$KB_NUM" in
-    2) KB="ch";    KB_VARIANT="de" ;;
-    3) KB="ch";    KB_VARIANT="de" ;;
-    4) KB="de";    KB_VARIANT="de" ;;
-    5) KB="fr_CH"; KB_VARIANT="fr" ;;
-    6) KB="fr";    KB_VARIANT="fr" ;;
-    7) KB="gb";    KB_VARIANT="gb" ;;
-    8) KB="es";    KB_VARIANT="es" ;;
-    9) KB="it";    KB_VARIANT="it" ;;
-    0) KB="pt";    KB_VARIANT="pt" ;;
-    *) KB="us";    KB_VARIANT="us" ;;
+    2) KB="sg"; KB_DIR="sg" ;;
+    3) KB="sg"; KB_DIR="sg" ;;
+    4) KB="de"; KB_DIR="de" ;;
+    5) KB="sf"; KB_DIR="sf" ;;
+    6) KB="fr"; KB_DIR="fr" ;;
+    7) KB="uk"; KB_DIR="uk" ;;
+    8) KB="es"; KB_DIR="es" ;;
+    9) KB="it"; KB_DIR="it" ;;
+    0) KB="pt"; KB_DIR="pt" ;;
+    *) KB="us"; KB_DIR="us" ;;
 esac
 
 # Apply keyboard NOW so password entry is correct.
-# setup-keymap hangs (tries to restart OpenRC service) — use loadkmap instead.
-# loadkmap is a BusyBox built-in that loads a binary keymap directly.
+# Alpine stores bmap files gzipped (.bmap.gz) — pipe through zcat for loadkmap.
 _kb_applied=0
 for _bmap in \
-    "/usr/share/bkeymaps/${KB_VARIANT}/${KB}-${KB_VARIANT}.bmap" \
-    "/usr/share/bkeymaps/${KB_VARIANT}/${KB}.bmap" \
-    "/usr/share/bkeymaps/${KB_VARIANT}/${KB_VARIANT}.bmap" \
-    "/usr/share/bkeymaps/de/${KB}.bmap" \
+    "/usr/share/bkeymaps/${KB_DIR}/${KB}.bmap.gz" \
+    "/usr/share/bkeymaps/${KB_DIR}/${KB}-latin1.bmap.gz" \
+    "/usr/share/bkeymaps/${KB_DIR}/${KB_DIR}.bmap.gz" \
+    "/usr/share/bkeymaps/${KB_DIR}/${KB}.bmap" \
+    "/usr/share/bkeymaps/${KB}.bmap.gz" \
     "/usr/share/bkeymaps/${KB}.bmap"
 do
-    if [ -f "$_bmap" ]; then
-        loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break
-    fi
+    [ -f "$_bmap" ] || continue
+    case "$_bmap" in
+        *.gz) zcat "$_bmap" 2>/dev/null | loadkmap 2>/dev/null && _kb_applied=1 && break ;;
+        *)    loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break ;;
+    esac
 done
 if [ "$_kb_applied" -eq 0 ]; then
-    # Fallback: try loadkeys (kbd package) with a 2s timeout
     timeout 2 loadkeys "$KB" >/dev/null 2>&1 && _kb_applied=1 || true
 fi
 if [ "$_kb_applied" -eq 1 ]; then
-    _ok "Keyboard: $KB ($KB_VARIANT) — active now"
+    _ok "Keyboard: $KB — active now"
 else
-    _ok "Keyboard: $KB ($KB_VARIANT) — will apply on installed system"
+    _ok "Keyboard: $KB — will apply on installed system"
     _dim "  (Live session stays US — type passwords consistently)"
 fi
 
@@ -289,10 +290,8 @@ _ok "Network: IP = ${_IP_CURRENT}"
 apk update >>"$LOG" 2>&1 || { _err "Cannot reach package repo. Log: $LOG"; sleep 5; }
 apk add --quiet parted e2fsprogs dosfstools util-linux >>"$LOG" 2>&1 || true
 
-step 2 "Writing keyboard config to installed system..."
-mkdir -p /mnt/etc
-printf 'KEYMAP=%s\nXKBLAYOUT=%s\nXKBVARIANT=%s\n' \
-    "$KB" "$KB" "$KB_VARIANT" > /mnt/etc/vconsole.conf 2>/dev/null || true
+step 2 "Confirming network..."
+_ok "Network ready — proceeding with installation"
 
 step 3 "Partitioning $DISK..."
 run parted -s "$DISK" mklabel gpt
@@ -314,9 +313,9 @@ printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/main\nhttps://dl-cdn
     > /mnt/etc/apk/repositories
 
 apk --root /mnt --initdb add --quiet \
-    alpine-base linux-lts linux-firmware-none openrc \
+    alpine-base linux-lts linux-firmware openrc \
     grub grub-efi efibootmgr openssh \
-    python3 py3-pip curl git sudo \
+    kbd-bkeymaps python3 py3-pip curl git sudo \
     >>"$LOG" 2>&1 || { _err "Package install failed — check internet. Log: $LOG"; sleep 10; exit 1; }
 
 step 6 "Configuring system..."
@@ -329,19 +328,51 @@ EFI_UUID=$(blkid  -s UUID -o value "$EFI")
 printf 'UUID=%s\t/\t\text4\tnoatime,errors=remount-ro\t0\t1\n' "$ROOT_UUID" > /mnt/etc/fstab
 printf 'UUID=%s\t/boot/efi\tvfat\tumask=0077\t0\t2\n' "$EFI_UUID" >> /mnt/etc/fstab
 
-printf 'auto lo\niface lo inet loopback\nauto eth0\niface eth0 inet dhcp\n' \
-    > /mnt/etc/network/interfaces
+# Detect the live NIC name so the installed system uses the right interface.
+# Alpine doesn't use predictable names by default so eth0 is standard,
+# but if e1000 is the first module to register it may appear as enp* on some kernels.
+_primary_iface=$(ls /sys/class/net/ 2>/dev/null | grep -v lo | head -1)
+_primary_iface="${_primary_iface:-eth0}"
+
+# Load NIC drivers at boot on the installed system — prevents a race where
+# OpenRC networking starts before udev/mdev has loaded the NIC module.
+printf 'e1000\ne1000e\nr8169\nvirtio_net\nvirtio_pci\nigb\nvmxnet3\n' > /mnt/etc/modules
+
+{
+    printf 'auto lo\niface lo inet loopback\n\n'
+    printf 'auto %s\niface %s inet dhcp\n' "$_primary_iface" "$_primary_iface"
+    [ "$_primary_iface" != "eth0" ] && printf '\nauto eth0\niface eth0 inet dhcp\n'
+} > /mnt/etc/network/interfaces
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /mnt/etc/resolv.conf
 
 chroot /mnt setup-timezone -z UTC >&3 2>&3 || true
 chroot /mnt ssh-keygen -A >&3 2>&3 || true
 chroot /mnt rc-update add sshd default >&3 2>&3 || true
 chroot /mnt rc-update add networking default >&3 2>&3 || true
+chroot /mnt rc-update add modules boot >&3 2>&3 || true
+
+# Keyboard: write Alpine-native keymap config (NOT systemd vconsole.conf)
+mkdir -p /mnt/etc/conf.d
+printf 'keymap="%s"\n' "$KB" > /mnt/etc/conf.d/keymaps
+chroot /mnt rc-update add keymaps boot >&3 2>&3 || true
 
 [ -n "$CTRL" ] && {
     mkdir -p /mnt/etc/nexis-hypervisor
     printf '{"pending_controller_url": "%s"}\n' "$CTRL" > /mnt/etc/nexis-hypervisor/config.json
 }
+
+# Set GRUB defaults so Alpine's initramfs loads NIC modules before networking.
+# modules= is read by Alpine's initramfs init; this ensures e1000/virtio are
+# available before OpenRC tries to bring up the network interface.
+mkdir -p /mnt/etc/default
+cat > /mnt/etc/default/grub << 'GRUBEOF'
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=3
+GRUB_DISTRIBUTOR="NeXiS Hypervisor"
+GRUB_CMDLINE_LINUX_DEFAULT="modules=e1000,e1000e,r8169,igb,vmxnet3,virtio_net,virtio_pci quiet"
+GRUB_CMDLINE_LINUX=""
+GRUB_TERMINAL=console
+GRUBEOF
 
 step 7 "Installing bootloader..."
 chroot /mnt grub-install --target=x86_64-efi \

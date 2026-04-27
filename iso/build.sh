@@ -103,7 +103,7 @@ if [[ -n "$BMAP_PKG" ]]; then
     curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/${BMAP_PKG}" \
         -o "$WORK_DIR/kbd-bkeymaps.apk" 2>/dev/null \
     && tar xzf "$WORK_DIR/kbd-bkeymaps.apk" -C "$APKOVL_DIR" 2>/dev/null || true
-    _ok "Keyboard bmap files bundled ($(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap' 2>/dev/null | wc -l) layouts)"
+    _ok "Keyboard bmap files bundled ($(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap*' 2>/dev/null | wc -l) layouts)"
 else
     _ok "kbd-bkeymaps not found on CDN — keyboard applies on installed system"
 fi
@@ -130,7 +130,7 @@ _ok "/nexis/ staged on ISO"
 # virtio_pci MUST be in this list for VMs — without it the VirtIO PCI bus
 # is never scanned and virtio_net/virtio_blk are never registered.
 # ahci,sd-mod,nvme cover common bare-metal disk controllers.
-KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,ahci,nvme nomodeset alpine_dev=autodetect"
+KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,e1000,e1000e,r8169,8139too,igb,vmxnet3,pcnet32,ahci,nvme nomodeset alpine_dev=autodetect"
 
 for grub_cfg in \
     "$ISO_SRC/boot/grub/grub.cfg" \
