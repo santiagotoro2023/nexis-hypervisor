@@ -35,10 +35,18 @@ trap _cleanup EXIT
 
 _print "Installing build dependencies..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-# grub-efi-amd64-bin and grub-pc-bin are intentionally excluded here.
-# Their postinst scripts can fail on Ubuntu CI runners. We copy the module
-# directories from the built rootfs (which has them installed) instead.
+
+# On ubuntu-latest, unattended-upgrades often holds the dpkg lock at startup.
+# Wait up to 5 minutes for it to release before running apt-get.
+_lock_wait=0
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+      fuser /var/lib/apt/lists/lock     >/dev/null 2>&1; do
+    _lock_wait=$((_lock_wait + 1))
+    [[ $_lock_wait -gt 60 ]] && _err "dpkg/apt lock held for >5 min — giving up"
+    sleep 5
+done
+
+apt-get update -q
 apt-get install -y --no-install-recommends \
     debootstrap \
     squashfs-tools \
