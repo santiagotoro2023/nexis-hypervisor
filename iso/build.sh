@@ -18,7 +18,7 @@ _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
 _err()   { printf '\033[38;5;196m  err\033[0m %s\n'  "$1" >&2; exit 1; }
 
-[[ $EUID -ne 0 ]] && _err "run as root (use: sudo -E bash iso/build.sh)"
+[[ $EUID -ne 0 ]] && _err "must run as root"
 
 ROOTFS_MOUNTS_DONE=0
 _cleanup() {
@@ -38,13 +38,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     debootstrap \
-    debian-archive-keyring \
     squashfs-tools \
     xorriso \
     grub-common \
     grub-efi-amd64-bin \
     grub-pc-bin \
-    mtools
+    mtools \
+    ca-certificates
 
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
