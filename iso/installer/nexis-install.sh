@@ -10,7 +10,7 @@ RED='\033[1;31m'
 GRN='\033[1;32m'
 
 LOG=/tmp/nexis-install.log
-exec 3>>"$LOG" 2>&3   # send stderr to log, keep stdout clean
+exec 3>>"$LOG"   # fd3 = log file; stderr stays on screen so errors are visible
 
 _print() { printf '%b%s%b\n' "$OR" "$1" "$RST"; }
 _dim()   { printf '%b%s%b\n' "$DIM" "$1" "$RST"; }
@@ -42,11 +42,17 @@ _confirm() {
     case "$ANS" in [yY]*) return 0;; *) return 1;; esac
 }
 
-# ── Ensure apk repositories ───────────────────────────────────────────────────
+# ── Ensure apk repositories and network ──────────────────────────────────────
 {
     printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/main\n'
     printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/community\n'
 } > /etc/apk/repositories
+
+# Bring up all network interfaces via DHCP (in case networking service is slow)
+for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+    ip link set "$_iface" up 2>/dev/null || true
+done
+udhcpc -b -q 2>/dev/null || true   # background DHCP, quiet
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 _header
@@ -193,11 +199,22 @@ _print "  INSTALLING — DO NOT POWER OFF"
 printf '\n'
 
 step() { printf '%b  [%s/8]%b  %s\n' "$OR" "$1" "$RST" "$2"; }
-run()  { "$@" >&3 2>&3; }
+run()  { "$@" >>"$LOG" 2>&1; }
 
-step 1 "Installing required tools..."
-apk update >&3 2>&3
-apk add --quiet parted e2fsprogs dosfstools util-linux >&3 2>&3
+step 1 "Waiting for network and installing required tools..."
+# Retry apk update until network is reachable (max 60 s)
+_tries=0
+while ! apk update >>"$LOG" 2>&1; do
+    _tries=$((_tries + 1))
+    if [ $_tries -ge 20 ]; then
+        _err "No network after 60 s — check cable/DHCP. Log: $LOG"
+        sleep 10
+        exit 1
+    fi
+    printf '%b  Waiting for network... (%d/20)%b\r' "$DIM" "$_tries" "$RST"
+    sleep 3
+done
+apk add --quiet parted e2fsprogs dosfstools util-linux >>"$LOG" 2>&1
 
 step 2 "Setting up keyboard..."
 setup-keymap "$KB" "$KB" >&3 2>&3 || true
@@ -225,7 +242,7 @@ apk --root /mnt --initdb add --quiet \
     alpine-base linux-lts linux-firmware-none openrc \
     grub grub-efi efibootmgr openssh \
     python3 py3-pip curl git sudo \
-    >&3 2>&3 || { _err "Package install failed — check internet. Log: $LOG"; exit 1; }
+    >>"$LOG" 2>&1 || { _err "Package install failed — check internet. Log: $LOG"; sleep 10; exit 1; }
 
 step 6 "Configuring system..."
 printf '%s\n' "$HNAME" > /mnt/etc/hostname
