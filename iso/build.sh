@@ -48,62 +48,57 @@ xorriso -osirrox on -indev "$ALPINE_ISO" -extract / "$ISO_SRC/" 2>/dev/null
 chmod -R u+w "$ISO_SRC"
 _ok "Extracted"
 
-# ── 3. Find initramfs ─────────────────────────────────────────────────────────
+# ── 3. Alpine overlay (apkovl) — the correct way to customise Alpine live ─────
+#
+# Alpine applies localhost.apkovl.tar.gz from the boot device before getty
+# starts. This overlays files onto the running system automatically.
+# No initramfs extraction or repacking needed.
 
-INITRAMFS=""
-for candidate in \
-    "$ISO_SRC/boot/initramfs-lts" \
-    "$ISO_SRC/boot/initramfs" \
-    "$ISO_SRC/boot/initrd-lts"
-do
-    [[ -f "$candidate" ]] && { INITRAMFS="$candidate"; break; }
-done
-[[ -z "$INITRAMFS" ]] && _err "initramfs not found in Alpine ISO"
-_ok "initramfs: $INITRAMFS"
+APKOVL_DIR="$WORK_DIR/apkovl"
+rm -rf "$APKOVL_DIR" && mkdir -p "$APKOVL_DIR"
 
-# ── 4. Extract and patch initramfs ────────────────────────────────────────────
+# /etc/inittab — auto-login root on tty1 so our installer fires immediately
+mkdir -p "$APKOVL_DIR/etc"
+cat > "$APKOVL_DIR/etc/inittab" << 'EOF'
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+tty1::respawn:/sbin/getty -a root -L 0 tty1
+tty2::respawn:/sbin/getty 38400 tty2
+tty3::respawn:/sbin/getty 38400 tty3
+tty4::respawn:/sbin/getty 38400 tty4
+tty5::respawn:/sbin/getty 38400 tty5
+tty6::respawn:/sbin/getty 38400 tty6
+::shutdown:/sbin/openrc shutdown
+EOF
 
-INITRD_DIR="$WORK_DIR/initrd-root"
-_print "Extracting initramfs…"
-rm -rf "$INITRD_DIR" && mkdir -p "$INITRD_DIR"
-( cd "$INITRD_DIR" && zcat "$INITRAMFS" | cpio -id --quiet 2>/dev/null )
-_ok "initramfs extracted ($(find "$INITRD_DIR" | wc -l) entries)"
-
-# Stage installer script
-mkdir -p "$INITRD_DIR/usr/local/bin" "$INITRD_DIR/opt/nexis-installer"
-cp "$SCRIPT_DIR/installer/nexis-install.sh" "$INITRD_DIR/usr/local/bin/nexis-install"
-chmod +x "$INITRD_DIR/usr/local/bin/nexis-install"
-cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$INITRD_DIR/opt/nexis-installer/install.sh"
-cp "$SCRIPT_DIR/firstboot-tui.py"                  "$INITRD_DIR/opt/nexis-installer/"
-_ok "Installer staged"
-
-# Auto-login root on tty1, then .profile launches the installer.
-# -a root: BusyBox getty auto-login flag (more reliable than -l for our use).
-if [[ -f "$INITRD_DIR/etc/inittab" ]]; then
-    # Replace the tty1 line with auto-login
-    sed -i 's|^tty1::.*|tty1::respawn:/sbin/getty -a root -L 0 tty1|' \
-        "$INITRD_DIR/etc/inittab"
-    _ok "inittab: auto-login root on tty1"
-fi
-
-# Root .profile: exec installer when on tty1
-mkdir -p "$INITRD_DIR/root"
-cat > "$INITRD_DIR/root/.profile" << 'PROFILE'
+# /root/.profile — exec installer when root logs in on tty1
+mkdir -p "$APKOVL_DIR/root"
+cat > "$APKOVL_DIR/root/.profile" << 'EOF'
 export TERM=linux
 if [ "$(tty 2>/dev/null)" = "/dev/tty1" ] && [ -x /usr/local/bin/nexis-install ]; then
     exec /usr/local/bin/nexis-install
 fi
-PROFILE
-_ok ".profile: installer auto-start on tty1"
+EOF
 
-# ── 5. Repack initramfs ───────────────────────────────────────────────────────
+# /usr/local/bin/nexis-install — the installer (available immediately at boot)
+mkdir -p "$APKOVL_DIR/usr/local/bin"
+cp "$SCRIPT_DIR/installer/nexis-install.sh" "$APKOVL_DIR/usr/local/bin/nexis-install"
+chmod +x "$APKOVL_DIR/usr/local/bin/nexis-install"
 
-_print "Repacking initramfs…"
-( cd "$INITRD_DIR" && find . | cpio -o -H newc --quiet | gzip -9 ) > "$WORK_DIR/initramfs-new.gz"
-cp "$WORK_DIR/initramfs-new.gz" "$INITRAMFS"
-_ok "initramfs repacked ($(du -h "$INITRAMFS" | cut -f1))"
+# /opt/nexis-installer — support files the installer copies to the target disk
+mkdir -p "$APKOVL_DIR/opt/nexis-installer"
+cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$APKOVL_DIR/opt/nexis-installer/install.sh"
+cp "$SCRIPT_DIR/firstboot-tui.py"                  "$APKOVL_DIR/opt/nexis-installer/"
+cp "$SCRIPT_DIR/nexis-shell.py"                    "$APKOVL_DIR/opt/nexis-installer/"
 
-# ── 6. Stage /nexis/ on ISO (accessible as /media/cdrom/nexis/ from live) ────
+# Pack the overlay (Alpine expects HOSTNAME.apkovl.tar.gz; default hostname = localhost)
+_print "Building apkovl overlay…"
+( cd "$APKOVL_DIR" && tar czf "$WORK_DIR/localhost.apkovl.tar.gz" . )
+cp "$WORK_DIR/localhost.apkovl.tar.gz" "$ISO_SRC/"
+_ok "apkovl: $(du -h "$ISO_SRC/localhost.apkovl.tar.gz" | cut -f1)  (applied by Alpine before getty)"
+
+# ── 4. Stage /nexis/ on ISO (accessible as /media/cdrom/nexis/ or similar) ───
 
 mkdir -p "$ISO_SRC/nexis"
 cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$ISO_SRC/nexis/install.sh"
