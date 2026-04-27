@@ -36,13 +36,14 @@ trap _cleanup EXIT
 _print "Installing build dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+# grub-efi-amd64-bin and grub-pc-bin are intentionally excluded here.
+# Their postinst scripts can fail on Ubuntu CI runners. We copy the module
+# directories from the built rootfs (which has them installed) instead.
 apt-get install -y --no-install-recommends \
     debootstrap \
     squashfs-tools \
     xorriso \
     grub-common \
-    grub-efi-amd64-bin \
-    grub-pc-bin \
     mtools \
     ca-certificates
 
@@ -217,6 +218,16 @@ EOF
 _ok "GRUB config written"
 
 # ── 9. Build ISO ──────────────────────────────────────────────────────────────
+
+# Copy GRUB platform modules from rootfs so grub-mkrescue can find them.
+# This avoids installing grub-efi-amd64-bin/grub-pc-bin on the host.
+_print "Staging GRUB modules from rootfs..."
+mkdir -p /usr/lib/grub
+for _plat in x86_64-efi i386-pc; do
+    [[ -d "$ROOTFS/usr/lib/grub/$_plat" ]] && \
+        cp -r "$ROOTFS/usr/lib/grub/$_plat" /usr/lib/grub/ || true
+done
+_ok "GRUB modules: $(ls /usr/lib/grub/)"
 
 _print "Building ISO..."
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"

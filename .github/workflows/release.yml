@@ -144,19 +144,21 @@ jobs:
           V="${{ env.NEXIS_VERSION }}"
           echo "version=${V#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Diagnostics
+        run: |
+          echo "=== runner ==="
+          id; uname -r; df -h / | tail -1; free -h | grep Mem
+          echo "=== debian mirror ==="
+          curl -sSm10 -o /dev/null -w "deb.debian.org: %{http_code}\n" \
+            http://deb.debian.org/debian/dists/bookworm/InRelease || true
+          echo "=== key packages ==="
+          apt-cache show debootstrap grub-common squashfs-tools 2>/dev/null \
+            | grep -E '^(Package|Version):' || true
+
       - name: Build ISO
         env:
           NEXIS_VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          # Run inside a truly privileged Debian container.
-          # 'docker run --privileged' inside a step gives full CAP_SYS_ADMIN
-          # (unlike 'container: options: --privileged' which Azure-hosted runners restrict).
-          docker run --privileged --rm \
-            -v "$GITHUB_WORKSPACE:/workspace" \
-            -w /workspace \
-            -e NEXIS_VERSION="$NEXIS_VERSION" \
-            debian:bookworm \
-            bash iso/build.sh
+        run: sudo -E bash iso/build.sh
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
