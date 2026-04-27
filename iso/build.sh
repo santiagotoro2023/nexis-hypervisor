@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# NeXiS Hypervisor — ISO Builder
+# NeXiS Hypervisor — ISO Builder (Alpine Linux edition)
 #
-# Strategy: download Debian 12 (bookworm) netinst, add a single NeXiS boot
-# entry with auto=true priority=critical, and a complete preseed that drives
-# the Debian installer fully automatically. No live system. No custom UI.
-# No framebuffer. No X11. The Debian text installer runs headlessly, which
-# works on literally any hardware including NVIDIA machines.
+# Downloads Alpine Linux standard ISO, modifies the initramfs to auto-start
+# our interactive whiptail installer, patches the boot menu, repacks.
 #
-# User experience:
-#   Boot → NeXiS GRUB menu (8 s timeout) → installation runs automatically
-#   (~15 min, progress shown as text) → reboot → firstboot TUI → web UI
-#
-# Must run as root in a Debian/Ubuntu environment.
+# Boot:    GRUB/syslinux → Alpine live (nomodeset, no GPU needed)
+# Install: whiptail TUI → keyboard / hostname / password / controller URL
+#          → apk install Alpine to disk → NeXiS services → reboot
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
@@ -21,45 +16,27 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-# Try several URL bases in order — whichever has a Debian 12 ISO wins
-_find_debian12_iso() {
-    for base in \
-        "https://cdimage.debian.org/debian-cd/current-oldstable/amd64/iso-cd" \
-        "https://cdimage.debian.org/cdimage/archive/latest-oldstable/amd64/iso-cd" \
-        "https://cdimage.debian.org/debian-cd/12.9.0/amd64/iso-cd" \
-        "https://cdimage.debian.org/debian-cd/12.8.0/amd64/iso-cd" \
-        "https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd"
-    do
-        local fname
-        fname=$(curl -sSL --max-time 10 "${base}/SHA256SUMS" 2>/dev/null \
-            | grep -oP 'debian-12[\d.]+-amd64-netinst\.iso' | head -1 || true)
-        if [[ -n "$fname" ]]; then
-            echo "${base}/${fname}"
-            return 0
-        fi
-    done
-    return 1
-}
-DEBIAN_ISO_URL=""
+ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64"
 
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
 _err()   { printf '\033[38;5;196m  err\033[0m %s\n'  "$1" >&2; exit 1; }
 
 [[ $EUID -ne 0 ]] && _err "run as root"
-apt-get install -yq xorriso python3 curl 2>/dev/null | tail -1
+apt-get install -yq xorriso cpio gzip curl 2>/dev/null | tail -1
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
-# ── 1. Download Debian 12 netinst ─────────────────────────────────────────────
+# ── 1. Download Alpine standard ISO ──────────────────────────────────────────
 
-DEBIAN_ISO="$WORK_DIR/debian-netinst.iso"
-if [[ ! -f "$DEBIAN_ISO" ]]; then
-    _print "Finding Debian 12 netinst ISO…"
-    DEBIAN_ISO_URL=$(_find_debian12_iso) \
-        || _err "Could not find Debian 12 netinst ISO from any mirror"
-    _print "Downloading: $DEBIAN_ISO_URL"
-    curl -fL "$DEBIAN_ISO_URL" -o "$DEBIAN_ISO"
-    _ok "Downloaded: $(du -h "$DEBIAN_ISO" | cut -f1)"
+ALPINE_ISO="$WORK_DIR/alpine.iso"
+if [[ ! -f "$ALPINE_ISO" ]]; then
+    _print "Finding Alpine ISO filename…"
+    FNAME=$(curl -sSL "${ALPINE_MIRROR}/" \
+        | grep -oP 'alpine-standard-[\d.]+-x86_64\.iso' | head -1 || true)
+    [[ -z "$FNAME" ]] && _err "Could not find Alpine ISO at $ALPINE_MIRROR"
+    _print "Downloading $FNAME…"
+    curl -fL "${ALPINE_MIRROR}/${FNAME}" -o "$ALPINE_ISO"
+    _ok "$FNAME ($(du -h "$ALPINE_ISO" | cut -f1))"
 fi
 
 # ── 2. Extract ISO ────────────────────────────────────────────────────────────
@@ -67,137 +44,66 @@ fi
 ISO_SRC="$WORK_DIR/iso-src"
 _print "Extracting ISO…"
 rm -rf "$ISO_SRC" && mkdir -p "$ISO_SRC"
-xorriso -osirrox on -indev "$DEBIAN_ISO" -extract / "$ISO_SRC/" 2>/dev/null
+xorriso -osirrox on -indev "$ALPINE_ISO" -extract / "$ISO_SRC/" 2>/dev/null
 chmod -R u+w "$ISO_SRC"
-
-# Verify the installer kernel exists
-[[ -f "$ISO_SRC/install.amd/vmlinuz" ]] \
-    || _err "Installer kernel not found — unexpected ISO structure"
 _ok "Extracted"
 
-# ── 3. Write preseed ──────────────────────────────────────────────────────────
-# auto=true priority=critical is passed as a kernel parameter.
-# The installer runs completely headlessly. The ONLY question it might ask
-# is disk selection if multiple disks are detected — in basic VGA text mode,
-# which always works regardless of GPU.
+# ── 3. Find initramfs ─────────────────────────────────────────────────────────
+
+INITRAMFS=""
+for candidate in \
+    "$ISO_SRC/boot/initramfs-lts" \
+    "$ISO_SRC/boot/initramfs" \
+    "$ISO_SRC/boot/initrd-lts"
+do
+    [[ -f "$candidate" ]] && { INITRAMFS="$candidate"; break; }
+done
+[[ -z "$INITRAMFS" ]] && _err "initramfs not found in Alpine ISO"
+_ok "initramfs: $INITRAMFS"
+
+# ── 4. Extract and patch initramfs ────────────────────────────────────────────
+
+INITRD_DIR="$WORK_DIR/initrd-root"
+_print "Extracting initramfs…"
+rm -rf "$INITRD_DIR" && mkdir -p "$INITRD_DIR"
+( cd "$INITRD_DIR" && zcat "$INITRAMFS" | cpio -id --quiet 2>/dev/null )
+_ok "initramfs extracted ($(find "$INITRD_DIR" | wc -l) entries)"
+
+# Stage installer script
+mkdir -p "$INITRD_DIR/usr/local/bin" "$INITRD_DIR/opt/nexis-installer"
+cp "$SCRIPT_DIR/installer/nexis-install.sh" "$INITRD_DIR/usr/local/bin/nexis-install"
+chmod +x "$INITRD_DIR/usr/local/bin/nexis-install"
+cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$INITRD_DIR/opt/nexis-installer/install.sh"
+cp "$SCRIPT_DIR/firstboot-tui.py"                  "$INITRD_DIR/opt/nexis-installer/"
+_ok "Installer staged"
+
+# Auto-start installer via getty: -n (no login prompt) -l (login program)
+# getty sets up the terminal properly before exec-ing our installer.
+if [[ -f "$INITRD_DIR/etc/inittab" ]]; then
+    sed -i 's|tty1::.*getty.*|tty1::respawn:/sbin/getty -n -l /usr/local/bin/nexis-install 0 tty1|' \
+        "$INITRD_DIR/etc/inittab"
+    _ok "inittab patched"
+fi
+
+# ── 5. Repack initramfs ───────────────────────────────────────────────────────
+
+_print "Repacking initramfs…"
+( cd "$INITRD_DIR" && find . | cpio -o -H newc --quiet | gzip -9 ) > "$WORK_DIR/initramfs-new.gz"
+cp "$WORK_DIR/initramfs-new.gz" "$INITRAMFS"
+_ok "initramfs repacked ($(du -h "$INITRAMFS" | cut -f1))"
+
+# ── 6. Stage /nexis/ on ISO (accessible as /media/cdrom/nexis/ from live) ────
 
 mkdir -p "$ISO_SRC/nexis"
+cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$ISO_SRC/nexis/install.sh"
+cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ISO_SRC/nexis/"
+_ok "/nexis/ staged on ISO"
 
-# Root password hash for "Asdf1234!" — same default as NeXiS web UI
-ROOT_HASH=$(python3 -c \
-    "import crypt; print(crypt.crypt('Asdf1234!', crypt.mksalt(crypt.METHOD_SHA512)))" \
-    2>/dev/null || echo "")
+# ── 7. GRUB config (UEFI) — single entry, NeXiS branding ────────────────────
+# Keep Alpine's required kernel params (modules= alpine_dev=) for USB boot.
+# Add nomodeset to prevent nouveau crashing on NVIDIA hardware.
 
-cat > "$ISO_SRC/nexis/preseed.cfg" << PRESEED
-# NeXiS Hypervisor preseed — fully automated installation
-# Kernel parameter: auto=true priority=critical
-# This drives the Debian installer headlessly without any interactive screens.
-
-d-i debian-installer/locale            string  en_US.UTF-8
-d-i keyboard-configuration/xkb-keymap select  us
-d-i netcfg/choose_interface            select  auto
-d-i netcfg/get_hostname                string  nexis-node
-d-i netcfg/get_domain                  string  local
-d-i netcfg/wireless_wep                string
-d-i mirror/country                     string  manual
-d-i mirror/http/hostname               string  deb.debian.org
-d-i mirror/http/directory              string  /debian
-d-i mirror/http/proxy                  string
-d-i clock-setup/utc                    boolean true
-d-i time/zone                          string  UTC
-d-i clock-setup/ntp                    boolean true
-
-# Erase the entire disk and use LVM. The installer picks the disk
-# automatically on single-disk systems; asks in text mode if multiple.
-d-i partman-auto/method                string  lvm
-d-i partman-auto-lvm/guided_size       string  max
-d-i partman-auto/choose_recipe         select  atomic
-d-i partman/confirm_write_new_label    boolean true
-d-i partman/choose_partition           select  finish
-d-i partman/confirm                    boolean true
-d-i partman/confirm_nooverwrite        boolean true
-
-# Root account — password "Asdf1234!" (same as NeXiS web UI default)
-# The firstboot TUI can be used to change this.
-d-i passwd/root-login                  boolean true
-d-i passwd/root-password-crypted       password ${ROOT_HASH:-\$6\$rounds=656000\$placeholder\$placeholder}
-d-i passwd/make-user                   boolean false
-
-# Minimal task set — no desktop, no printing, no bluetooth
-# ssh-server for remote access; everything else is installed by nexis install.sh
-tasksel tasksel/first                  multiselect minimal, ssh-server
-d-i pkgsel/include                     string  \
-    curl git python3 python3-pip python3-venv ca-certificates \
-    sudo htop vim-tiny
-d-i pkgsel/upgrade                     select  safe-upgrade
-
-d-i grub-installer/only_debian         boolean true
-d-i grub-installer/bootdev             string  default
-
-# After installation: copy NeXiS setup scripts into the installed system.
-d-i preseed/late_command               string  \
-    mkdir -p /target/opt /target/usr/local/bin /target/etc/systemd/system ; \
-    cp /cdrom/nexis/install.sh          /target/opt/nexis-install.sh       ; \
-    cp /cdrom/nexis/firstboot-tui.py    /target/usr/local/bin/nexis-firstboot ; \
-    chmod +x /target/opt/nexis-install.sh /target/usr/local/bin/nexis-firstboot ; \
-    cp /cdrom/nexis/nexis-install.service   /target/etc/systemd/system/    ; \
-    cp /cdrom/nexis/nexis-firstboot.service /target/etc/systemd/system/    ; \
-    in-target systemctl enable nexis-install.service nexis-firstboot.service ssh ; \
-    in-target systemctl disable bluetooth ModemManager avahi-daemon 2>/dev/null || true ; \
-    in-target systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
-
-d-i finish-install/reboot_in_progress  note
-PRESEED
-
-# ── 4. Copy NeXiS scripts onto ISO ───────────────────────────────────────────
-
-cp "$REPO_DIR/install.sh"         "$ISO_SRC/nexis/"
-cp "$SCRIPT_DIR/firstboot-tui.py" "$ISO_SRC/nexis/"
-
-cat > "$ISO_SRC/nexis/nexis-install.service" << 'EOF'
-[Unit]
-Description=NeXiS Hypervisor Installation
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/opt/nexis-hypervisor
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /opt/nexis-install.sh
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > "$ISO_SRC/nexis/nexis-firstboot.service" << 'EOF'
-[Unit]
-Description=NeXiS Hypervisor First-Boot Configuration
-After=nexis-install.service
-Wants=nexis-install.service
-ConditionPathExists=!/etc/nexis-hypervisor/.firstboot-done
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/nexis-firstboot
-StandardInput=tty
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# ── 5. GRUB config — UEFI ────────────────────────────────────────────────────
-# Two entries: NeXiS (default, auto-installs) and plain Debian (manual).
-# nomodeset: prevents nouveau loading on NVIDIA hardware.
-# auto=true priority=critical: runs installer headlessly.
-# quiet: suppresses kernel noise; installer output still shows.
-
-KPARAMS="auto=true priority=critical file=/cdrom/nexis/preseed.cfg nomodeset"
+KPARAMS="modules=loop,squashfs,sd-mod,usb-storage quiet nomodeset console=tty1 alpine_dev=autodetect"
 
 for grub_cfg in \
     "$ISO_SRC/boot/grub/grub.cfg" \
@@ -214,62 +120,78 @@ set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz ${KPARAMS} ---
-    initrd  /install.amd/initrd.gz
+    linux  /boot/vmlinuz-lts ${KPARAMS}
+    initrd /boot/initramfs-lts
 }
 EOF
     _ok "GRUB: $grub_cfg"
 done
 
-# ── 6. Syslinux config — BIOS ─────────────────────────────────────────────────
-# txt.cfg: menu entries used in BIOS text mode
+# ── 8. Syslinux config (BIOS) — single entry ─────────────────────────────────
 
-TXT_CFG="$ISO_SRC/isolinux/txt.cfg"
-if [[ -f "$TXT_CFG" ]]; then
-    cat > "$TXT_CFG" << EOF
-default nexis
-label nexis
-    menu label Install NeXiS Hypervisor ${VERSION}
-    kernel /install.amd/vmlinuz
-    append ${KPARAMS} initrd=/install.amd/initrd.gz ---
+for syslinux_cfg in \
+    "$ISO_SRC/syslinux/syslinux.cfg" \
+    "$ISO_SRC/boot/syslinux/syslinux.cfg"
+do
+    [[ -f "$syslinux_cfg" ]] || continue
+    cat > "$syslinux_cfg" << EOF
+DEFAULT nexis
+LABEL nexis
+    MENU LABEL Install NeXiS Hypervisor ${VERSION}
+    LINUX /boot/vmlinuz-lts
+    INITRD /boot/initramfs-lts
+    APPEND ${KPARAMS}
+TIMEOUT 50
 EOF
-    _ok "syslinux: $TXT_CFG"
-fi
+    _ok "syslinux: $syslinux_cfg"
+done
 
-# menu.cfg: title
-MENU_CFG="$ISO_SRC/isolinux/menu.cfg"
-[[ -f "$MENU_CFG" ]] && \
-    sed -i "s/^menu title.*/menu title NeXiS Hypervisor ${VERSION}/" "$MENU_CFG"
-
-# ── 7. Repack ─────────────────────────────────────────────────────────────────
+# ── 9. Repack ISO ─────────────────────────────────────────────────────────────
 
 _print "Repacking ISO…"
-dd if="$DEBIAN_ISO" bs=1 count=432 of="$WORK_DIR/mbr.bin" 2>/dev/null
-
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
 
-xorriso -as mkisofs \
-    -r \
-    -V "$ISO_VOLUME" \
-    -o "$FINAL" \
-    -J --joliet-long \
-    -isohybrid-mbr "$WORK_DIR/mbr.bin" \
-    -partition_offset 16 \
-    -c isolinux/boot.cat \
-    -b isolinux/isolinux.bin \
-        -no-emul-boot -boot-load-size 4 -boot-info-table \
-    -eltorito-alt-boot \
-    -e boot/grub/efi.img \
-        -no-emul-boot \
-    -isohybrid-gpt-basdat \
-    "$ISO_SRC/"
+# Extract MBR from original Alpine ISO for hybrid BIOS boot
+dd if="$ALPINE_ISO" bs=1 count=432 of="$WORK_DIR/mbr.bin" 2>/dev/null
+
+# Locate BIOS boot binary (isolinux.bin or syslinux.bin)
+BIOS_BIN=""
+for b in \
+    "$ISO_SRC/syslinux/isolinux.bin" \
+    "$ISO_SRC/boot/syslinux/isolinux.bin" \
+    "$ISO_SRC/syslinux/syslinux.bin"
+do
+    [[ -f "$b" ]] && { BIOS_BIN="${b#$ISO_SRC/}"; break; }
+done
+
+# EFI image
+EFI_IMG=""
+for e in "$ISO_SRC/boot/grub/efi.img" "$ISO_SRC/efi.img"; do
+    [[ -f "$e" ]] && { EFI_IMG="${e#$ISO_SRC/}"; break; }
+done
+
+if [[ -n "$BIOS_BIN" && -n "$EFI_IMG" ]]; then
+    BOOTCAT="${BIOS_BIN%/*}/boot.cat"
+    xorriso -as mkisofs \
+        -r -V "$ISO_VOLUME" -o "$FINAL" -J --joliet-long \
+        -isohybrid-mbr "$WORK_DIR/mbr.bin" -partition_offset 16 \
+        -c "$BOOTCAT" \
+        -b "$BIOS_BIN" -no-emul-boot -boot-load-size 4 -boot-info-table \
+        -eltorito-alt-boot \
+        -e "$EFI_IMG" -no-emul-boot -isohybrid-gpt-basdat \
+        "$ISO_SRC/"
+elif [[ -n "$EFI_IMG" ]]; then
+    # EFI only
+    xorriso -as mkisofs \
+        -r -V "$ISO_VOLUME" -o "$FINAL" -J --joliet-long \
+        -eltorito-alt-boot -e "$EFI_IMG" -no-emul-boot \
+        "$ISO_SRC/"
+else
+    # Fallback: plain ISO
+    xorriso -as mkisofs -r -V "$ISO_VOLUME" -o "$FINAL" -J "$ISO_SRC/"
+fi
 
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"
-
-_ok "ISO: $FINAL"
-_ok "Size: $(du -h "$FINAL" | cut -f1)"
+_ok "ISO: $FINAL  ($(du -h "$FINAL" | cut -f1))"
 _ok "SHA256: $SHA"
-_print "Write: dd if=$(basename "$FINAL") of=/dev/sdX bs=4M status=progress && sync"
-_print "Boot: select 'Install NeXiS Hypervisor' and WAIT ~15 min — reboots automatically when done"
-_print "The screen may show black or text scroll during install — this is normal, do not power off"

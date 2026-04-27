@@ -1,202 +1,272 @@
-#!/usr/bin/env bash
-# NeXiS Hypervisor — Interactive Installer
-# Runs on the live system. Uses whiptail for menus.
-set -euo pipefail
+#!/bin/sh
+# NeXiS Hypervisor — Interactive Installer (Alpine Linux)
+# Runs on the Alpine live system via getty on tty1.
+# Asks keyboard / hostname / root password / NeXiS Controller URL,
+# then automates the rest: partition, install Alpine, configure, GRUB.
+set -e
 
+export TERM=linux
 LOG=/tmp/nexis-install.log
-TARGET=/mnt/nexis-target
 TITLE="NeXiS Hypervisor"
 
-msg()  { whiptail --title "$TITLE" --msgbox  "$1" 12 66; }
-err()  { whiptail --title "Error"  --msgbox  "Error: $1\n\nSee $LOG for details." 12 66; exit 1; }
+# ── Ensure networking ─────────────────────────────────────────────────────────
+if ! ip route show default 2>/dev/null | grep -q default; then
+    ip link set eth0 up 2>/dev/null || true
+    udhcpc -i eth0 -t 10 -q 2>/dev/null || true
+fi
+
+# ── Install whiptail and disk tools ──────────────────────────────────────────
+apk add --quiet newt parted e2fsprogs dosfstools blkid 2>>"$LOG" || true
+
+# ── TUI helpers ───────────────────────────────────────────────────────────────
+msg()  { whiptail --title "$TITLE" --msgbox  "$1" 12 66 3>&1 1>&2 2>&3; }
+info() { whiptail --title "$TITLE" --infobox "$1" 8 66; }
 ask()  { whiptail --title "$TITLE" --inputbox "$1" 10 66 "${2:-}" 3>&1 1>&2 2>&3; }
 pass() { whiptail --title "$TITLE" --passwordbox "$1" 10 66 3>&1 1>&2 2>&3; }
-info() { whiptail --title "$TITLE" --infobox "$1" 8 66; }
 yn()   { whiptail --title "$TITLE" --yesno "$1" 12 66; }
-
+step() { info "[$1/8] $2"; echo "$(date '+%H:%M:%S') [$1/8] $2" >>"$LOG"; }
 run()  { "$@" >>"$LOG" 2>&1; }
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 clear
+printf '\033[38;5;208m'
+cat << 'LOGO'
+
+    /\
+   /  \
+  / () \      NeXiS Hypervisor
+ /______\     Alpine Linux Edition
+
+LOGO
+printf '\033[0m'
+sleep 2
+
 msg "Welcome to NeXiS Hypervisor Installation.
 
-This will:
-  1. Partition the disk you select
-  2. Install Debian as the base system
-  3. Set up NeXiS Hypervisor on first boot
+Powered by Alpine Linux — lightweight, fast, secure.
+
+You will be asked for:
+  • Keyboard layout
+  • Hostname
+  • Root password
+  • NeXiS Controller URL (optional)
 
 Internet connection is required.
-All data on the selected disk will be erased."
+ALL DATA on the selected disk will be permanently erased."
 
-# ── Disk ─────────────────────────────────────────────────────────────────────
-MENU_ITEMS=()
-while read -r name size model; do
-    MENU_ITEMS+=("/dev/$name" "$size  $model")
-done < <(lsblk -d -o NAME,SIZE,MODEL --noheadings | grep -v loop)
+# ── 1. Keyboard layout ────────────────────────────────────────────────────────
+KB=$(whiptail --title "$TITLE" --menu "Select keyboard layout:" 20 60 10 \
+    "us"    "English (US)" \
+    "de"    "German (DE)" \
+    "ch"    "Swiss (default)" \
+    "de_CH" "Swiss German" \
+    "fr"    "French (FR)" \
+    "fr_CH" "Swiss French" \
+    "gb"    "English (UK)" \
+    "es"    "Spanish (ES)" \
+    "it"    "Italian (IT)" \
+    "pt"    "Portuguese (PT)" \
+    3>&1 1>&2 2>&3) || KB="us"
 
-[[ ${#MENU_ITEMS[@]} -eq 0 ]] && err "No disks detected."
+# ── 2. Hostname ───────────────────────────────────────────────────────────────
+HNAME=$(ask "Hostname for this hypervisor node:" "nexis-node-01") || exit 0
+HNAME=$(printf '%s' "$HNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
+[ -z "$HNAME" ] && HNAME="nexis-node"
 
-DISK=$(whiptail --title "Select Disk" \
-    --menu "Choose the installation disk.\nWARNING: everything on it will be erased." \
-    20 70 10 "${MENU_ITEMS[@]}" 3>&1 1>&2 2>&3) || exit 0
+# ── 3. Root password ──────────────────────────────────────────────────────────
+while true; do
+    P1=$(pass "Root password (minimum 8 characters):") || exit 0
+    [ "${#P1}" -lt 8 ] && { msg "Password must be at least 8 characters."; continue; }
+    P2=$(pass "Confirm root password:") || exit 0
+    [ "$P1" = "$P2" ] && break
+    msg "Passwords do not match. Please try again."
+done
+ROOT_PASS="$P1"
 
-# Partition suffix (nvme/mmcblk use p1/p2)
-if [[ "$DISK" =~ (nvme|mmcblk) ]]; then
+# ── 4. NeXiS Controller URL ───────────────────────────────────────────────────
+CTRL=$(ask "NeXiS Controller URL for SSO (optional — leave blank to skip):" \
+    "") || CTRL=""
+[ "$CTRL" = "https://192.168.1.x:8443" ] && CTRL=""
+
+# ── 5. Disk selection ─────────────────────────────────────────────────────────
+DISK_ARGS=""
+for d in /dev/sd? /dev/vd? /dev/nvme?n?; do
+    [ -b "$d" ] || continue
+    SIZE=$(lsblk -d -o SIZE --noheadings "$d" 2>/dev/null | xargs || echo "?")
+    MODEL=$(lsblk -d -o MODEL --noheadings "$d" 2>/dev/null | xargs || echo "Unknown")
+    DISK_ARGS="$DISK_ARGS $d \"${SIZE}  ${MODEL}\""
+done
+[ -z "$DISK_ARGS" ] && { msg "No disks found."; exit 1; }
+
+DISK=$(eval whiptail --title '"$TITLE"' \
+    --menu '"Select installation disk.\nWARNING: all data will be erased."' \
+    20 70 10 $DISK_ARGS \
+    3>&1 1>&2 2>&3) || exit 0
+
+# Partition naming (NVMe/MMC use p1/p2 suffix)
+if printf '%s' "$DISK" | grep -qE '(nvme|mmcblk)'; then
     EFI="${DISK}p1"; ROOT="${DISK}p2"
 else
     EFI="${DISK}1";  ROOT="${DISK}2"
 fi
 
-# ── Hostname ──────────────────────────────────────────────────────────────────
-HNAME=$(ask "Hostname for this hypervisor node:" "nexis-node-01") || exit 0
-HNAME=$(echo "$HNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
-[[ -z "$HNAME" ]] && HNAME="nexis-node"
+# ── 6. Confirm ────────────────────────────────────────────────────────────────
+yn "Ready to install.
 
-# ── Root password ─────────────────────────────────────────────────────────────
-while true; do
-    P1=$(pass "Root password (min 8 chars):") || exit 0
-    [[ ${#P1} -lt 8 ]] && { msg "Password must be at least 8 characters."; continue; }
-    P2=$(pass "Confirm root password:") || exit 0
-    [[ "$P1" == "$P2" ]] && break
-    msg "Passwords do not match. Try again."
-done
-ROOT_PASS="$P1"
-
-# ── Controller URL ────────────────────────────────────────────────────────────
-CTRL=$(ask "NeXiS Controller URL for SSO (leave blank to skip):" "") || CTRL=""
-
-# ── Confirm ───────────────────────────────────────────────────────────────────
-yn "Ready to install.\n
   Disk:        $DISK
   Hostname:    $HNAME
-  Controller:  ${CTRL:-none}
+  Keyboard:    $KB
+  Controller:  ${CTRL:-none (local auth)}
 
-ALL DATA ON $DISK WILL BE ERASED.
-Continue?" || exit 0
+ALL DATA ON $DISK WILL BE PERMANENTLY ERASED.
+This cannot be undone. Continue?" || exit 0
 
-# ── Installation ──────────────────────────────────────────────────────────────
+# ── 7. Install ────────────────────────────────────────────────────────────────
 
-step() { info "[$1] $2"; echo "$(date '+%H:%M:%S') [$1] $2" >>"$LOG"; }
+step 1 "Setting up keyboard…"
+setup-keymap "$KB" "$KB" >>"$LOG" 2>&1 || true
 
-step "1/8" "Partitioning $DISK..."
+step 2 "Partitioning $DISK…"
 run parted -s "$DISK" mklabel gpt
 run parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
 run parted -s "$DISK" set 1 esp on
 run parted -s "$DISK" mkpart root ext4 513MiB 100%
-sleep 1
+run mkfs.fat -F32 -n EFI "$EFI"
+run mkfs.ext4 -F -L nexis-root "$ROOT"
 
-step "2/8" "Formatting filesystems..."
-run mkfs.fat -F32 -n EFI    "$EFI"
-run mkfs.ext4 -F  -L nexis  "$ROOT"
+step 3 "Mounting target…"
+mkdir -p /mnt
+run mount "$ROOT" /mnt
+mkdir -p /mnt/boot/efi
+run mount "$EFI" /mnt/boot/efi
 
-step "3/8" "Mounting target..."
-mkdir -p "$TARGET"
-run mount "$ROOT" "$TARGET"
-mkdir -p "$TARGET/boot/efi"
-run mount "$EFI"  "$TARGET/boot/efi"
+step 4 "Installing Alpine base system (downloading, please wait)…"
+mkdir -p /mnt/etc/apk
+cp /etc/apk/repositories /mnt/etc/apk/repositories
 
-step "4/8" "Installing Debian base (this takes several minutes)..."
-run debootstrap \
-    --arch=amd64 \
-    --include=linux-image-amd64,systemd-sysv,locales,ca-certificates,openssh-server,sudo,grub-efi-amd64,grub-pc-bin \
-    bookworm "$TARGET" https://deb.debian.org/debian \
-    || err "debootstrap failed — check internet connection."
+apk --root /mnt --initdb add --quiet \
+    alpine-base \
+    linux-lts \
+    linux-firmware-none \
+    openrc \
+    grub \
+    grub-efi \
+    efibootmgr \
+    openssh \
+    python3 \
+    py3-pip \
+    curl \
+    git \
+    sudo \
+    util-linux \
+    >>"$LOG" 2>&1 || { msg "Package install failed — check internet. Log: $LOG"; exit 1; }
 
-step "5/8" "Configuring system..."
+step 5 "Configuring system…"
+# Hostname
+printf '%s\n' "$HNAME" > /mnt/etc/hostname
+printf '127.0.0.1\t%s\n127.0.1.1\t%s\n' "$HNAME" "$HNAME" >> /mnt/etc/hosts
+
+# Root password
+printf 'root:%s\n' "$ROOT_PASS" | chpasswd -R /mnt >>"$LOG" 2>&1
 
 # fstab
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT")
 EFI_UUID=$(blkid  -s UUID -o value "$EFI")
-cat > "$TARGET/etc/fstab" <<EOF
-UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0  1
-UUID=$EFI_UUID   /boot/efi  vfat  umask=0077         0  2
+cat > /mnt/etc/fstab << EOF
+UUID=$ROOT_UUID  /          ext4  noatime,errors=remount-ro  0  1
+UUID=$EFI_UUID   /boot/efi  vfat  umask=0077                 0  2
 EOF
 
-echo "$HNAME" > "$TARGET/etc/hostname"
-printf "127.0.0.1\tlocalhost\n127.0.1.1\t$HNAME\n" >> "$TARGET/etc/hosts"
-
-# Root password
-echo "root:$ROOT_PASS" | chpasswd -R "$TARGET"
-
-# Apt sources
-cat > "$TARGET/etc/apt/sources.list" <<'EOF'
-deb https://deb.debian.org/debian bookworm main contrib non-free-firmware
-deb https://security.debian.org/debian-security bookworm-security main
+# Network — DHCP via OpenRC/ifupdown
+cat > /mnt/etc/network/interfaces << 'EOF'
+auto lo
+iface lo inet loopback
+auto eth0
+iface eth0 inet dhcp
 EOF
+
+# DNS
+printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /mnt/etc/resolv.conf
+
+# Timezone
+chroot /mnt setup-timezone -z UTC >>"$LOG" 2>&1 || true
+
+# SSH — generate host keys and enable
+chroot /mnt ssh-keygen -A >>"$LOG" 2>&1 || true
+chroot /mnt rc-update add sshd default >>"$LOG" 2>&1 || true
+chroot /mnt rc-update add networking default >>"$LOG" 2>&1 || true
 
 # Controller URL
-if [[ -n "$CTRL" ]]; then
-    mkdir -p "$TARGET/etc/nexis-hypervisor"
+if [ -n "$CTRL" ]; then
+    mkdir -p /mnt/etc/nexis-hypervisor
     printf '{"pending_controller_url": "%s"}\n' "$CTRL" \
-        > "$TARGET/etc/nexis-hypervisor/config.json"
+        > /mnt/etc/nexis-hypervisor/config.json
 fi
 
-step "6/8" "Installing packages..."
-for d in proc sys dev dev/pts; do
-    mkdir -p "$TARGET/$d"
-    mount --bind "/$d" "$TARGET/$d" 2>>"$LOG" || true
-done
-DEBIAN_FRONTEND=noninteractive run chroot "$TARGET" apt-get install -yq \
-    curl git python3 python3-pip python3-venv libvirt-dev pkg-config build-essential \
-    || true   # non-fatal — NeXiS install.sh will retry
-
-step "7/8" "Installing GRUB bootloader..."
-run chroot "$TARGET" grub-install \
+step 6 "Installing GRUB bootloader…"
+chroot /mnt grub-install \
     --target=x86_64-efi \
     --efi-directory=/boot/efi \
     --bootloader-id=NeXiS \
-    --recheck \
-    || err "GRUB install failed"
-run chroot "$TARGET" update-grub
+    --recheck >>"$LOG" 2>&1 \
+    || { msg "GRUB install failed. Log: $LOG"; exit 1; }
+chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg >>"$LOG" 2>&1
 
-step "8/8" "Setting up NeXiS services..."
-cp /opt/nexis-installer/install.sh          "$TARGET/opt/nexis-install.sh"
-cp /opt/nexis-installer/firstboot-tui.py    "$TARGET/usr/local/bin/nexis-firstboot"
-chmod +x "$TARGET/opt/nexis-install.sh" "$TARGET/usr/local/bin/nexis-firstboot"
+step 7 "Copying NeXiS setup scripts…"
 
-cat > "$TARGET/etc/systemd/system/nexis-install.service" <<'SVC'
-[Unit]
-Description=NeXiS Hypervisor Installation
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/opt/nexis-hypervisor
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /opt/nexis-install.sh
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-SVC
-
-cat > "$TARGET/etc/systemd/system/nexis-firstboot.service" <<'SVC'
-[Unit]
-Description=NeXiS First-Boot Configuration
-After=nexis-install.service
-Wants=nexis-install.service
-ConditionPathExists=!/etc/nexis-hypervisor/.firstboot-done
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/nexis-firstboot
-StandardInput=tty
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-
-[Install]
-WantedBy=multi-user.target
-SVC
-
-run chroot "$TARGET" systemctl enable nexis-install.service nexis-firstboot.service ssh
-
-# Unmount
-for d in dev/pts dev sys proc boot/efi ''; do
-    umount -lf "$TARGET/${d}" 2>/dev/null || true
+# Find media mount point
+MEDIA=""
+for m in /media/cdrom /media/usb /run/media/*; do
+    [ -f "$m/nexis/install.sh" ] && { MEDIA="$m"; break; }
 done
+
+if [ -n "$MEDIA" ]; then
+    mkdir -p /mnt/opt
+    cp "$MEDIA/nexis/install.sh"        /mnt/opt/nexis-install.sh
+    cp "$MEDIA/nexis/firstboot-tui.py"  /mnt/usr/local/bin/nexis-firstboot
+else
+    # Fallback: grab install script from GitHub
+    curl -fsSL https://raw.githubusercontent.com/santiagotoro2023/nexis-hypervisor/main/iso/installer/nexis-install-alpine.sh \
+        -o /mnt/opt/nexis-install.sh >>"$LOG" 2>&1 || true
+    cp /opt/nexis-installer/firstboot-tui.py /mnt/usr/local/bin/nexis-firstboot 2>/dev/null || true
+fi
+chmod +x /mnt/opt/nexis-install.sh /mnt/usr/local/bin/nexis-firstboot 2>/dev/null || true
+
+# OpenRC service: install NeXiS on first boot
+cat > /mnt/etc/init.d/nexis-install << 'SVC'
+#!/sbin/openrc-run
+name="nexis-install"
+description="NeXiS Hypervisor installation"
+depend() { need net; after net; }
+start() {
+    [ -d /opt/nexis-hypervisor ] && return 0
+    ebegin "Installing NeXiS Hypervisor (see /var/log/nexis-install.log)"
+    /bin/sh /opt/nexis-install.sh > /var/log/nexis-install.log 2>&1
+    eend $?
+}
+SVC
+chmod +x /mnt/etc/init.d/nexis-install
+chroot /mnt rc-update add nexis-install default >>"$LOG" 2>&1
+
+# OpenRC service: firstboot TUI for network/controller config
+cat > /mnt/etc/init.d/nexis-firstboot << 'SVC'
+#!/sbin/openrc-run
+name="nexis-firstboot"
+description="NeXiS first-boot configuration TUI"
+depend() { need nexis-install; after nexis-install; }
+start() {
+    [ -f /etc/nexis-hypervisor/.firstboot-done ] && return 0
+    ebegin "Starting NeXiS first-boot configuration"
+    /usr/bin/python3 /usr/local/bin/nexis-firstboot </dev/tty1 >/dev/tty1 2>&1
+    eend $?
+}
+SVC
+chmod +x /mnt/etc/init.d/nexis-firstboot
+chroot /mnt rc-update add nexis-firstboot default >>"$LOG" 2>&1
+
+step 8 "Finalising…"
+umount /mnt/boot/efi 2>/dev/null || true
+umount /mnt          2>/dev/null || true
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 msg "Installation complete!
@@ -204,11 +274,10 @@ msg "Installation complete!
 NeXiS Hypervisor has been installed to $DISK.
 
 On first boot:
-  - NeXiS stack installs automatically (internet required)
-  - Configuration TUI runs for network/controller setup
-  - Web UI available at https://<ip>:8443
-
-Default login: creator / Asdf1234!
+  • NeXiS stack installs automatically (~5 min, needs internet)
+  • Configuration TUI runs for network / controller setup
+  • Web UI at https://<ip>:8443
+  • Default login: creator / Asdf1234!
 
 Remove the USB drive, then press OK to reboot."
 
