@@ -239,7 +239,7 @@ _ok "GRUB modules: $(ls /usr/lib/grub/)"
 
 _print "Building ISO..."
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
-grub-mkrescue -o "$FINAL" "$ISO_SRC" -- -V "$ISO_VOLUME"
+grub-mkrescue -o "$FINAL" "$ISO_SRC"
 
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"
