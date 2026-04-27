@@ -63,7 +63,7 @@ cat > "$APKOVL_DIR/etc/inittab" << 'EOF'
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
 ::wait:/sbin/openrc default
-tty1::respawn:/sbin/getty -a root -L 0 tty1
+tty1::respawn:/sbin/getty -n -l /usr/local/bin/nexis-install 0 tty1
 tty2::respawn:/sbin/getty 38400 tty2
 tty3::respawn:/sbin/getty 38400 tty3
 tty4::respawn:/sbin/getty 38400 tty4
