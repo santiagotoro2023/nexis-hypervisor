@@ -17,6 +17,8 @@ WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
 ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64"
+# extended ISO: includes network firmware (Realtek, Broadcom, Intel, etc.)
+# and more hardware drivers out of the box vs standard. Essential for bare metal.
 
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
@@ -32,7 +34,7 @@ ALPINE_ISO="$WORK_DIR/alpine.iso"
 if [[ ! -f "$ALPINE_ISO" ]]; then
     _print "Finding Alpine ISO filename…"
     FNAME=$(curl -sSL "${ALPINE_MIRROR}/" \
-        | grep -oP 'alpine-standard-[\d.]+-x86_64\.iso' | head -1 || true)
+        | grep -oP 'alpine-extended-[\d.]+-x86_64\.iso' | head -1 || true)
     [[ -z "$FNAME" ]] && _err "Could not find Alpine ISO at $ALPINE_MIRROR"
     _print "Downloading $FNAME…"
     curl -fL "${ALPINE_MIRROR}/${FNAME}" -o "$ALPINE_ISO"

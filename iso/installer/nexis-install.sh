@@ -48,11 +48,11 @@ _confirm() {
     printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/community\n'
 } > /etc/apk/repositories
 
-# Bring up all network interfaces via DHCP (in case networking service is slow)
+# Bring up every interface and run DHCP on each (udhcpc needs -i IFACE)
 for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
     ip link set "$_iface" up 2>/dev/null || true
+    udhcpc -i "$_iface" -b -q 2>/dev/null || true
 done
-udhcpc -b -q 2>/dev/null || true   # background DHCP, quiet
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 _header
@@ -201,20 +201,61 @@ printf '\n'
 step() { printf '%b  [%s/8]%b  %s\n' "$OR" "$1" "$RST" "$2"; }
 run()  { "$@" >>"$LOG" 2>&1; }
 
-step 1 "Waiting for network and installing required tools..."
-# Retry apk update until network is reachable (max 60 s)
+step 1 "Configuring network..."
+# Show detected interfaces
+_ifaces=$(ls /sys/class/net/ 2>/dev/null | grep -v lo | tr '\n' ' ')
+_dim "  Detected interfaces: ${_ifaces:-none}"
+
+# Retry DHCP on each interface, up to 60 s
 _tries=0
-while ! apk update >>"$LOG" 2>&1; do
+_got_ip=0
+while [ $_got_ip -eq 0 ] && [ $_tries -lt 20 ]; do
+    for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+        ip link set "$_iface" up 2>/dev/null || true
+        udhcpc -i "$_iface" -n -q 2>/dev/null && _got_ip=1 && break
+    done
+    [ $_got_ip -eq 1 ] && break
     _tries=$((_tries + 1))
-    if [ $_tries -ge 20 ]; then
-        _err "No network after 60 s — check cable/DHCP. Log: $LOG"
-        sleep 10
-        exit 1
-    fi
-    printf '%b  Waiting for network... (%d/20)%b\r' "$DIM" "$_tries" "$RST"
+    printf '%b  Waiting for DHCP... (%ds)%b\r' "$DIM" "$((_tries * 3))" "$RST"
     sleep 3
 done
-apk add --quiet parted e2fsprogs dosfstools util-linux >>"$LOG" 2>&1
+
+if [ $_got_ip -eq 0 ]; then
+    printf '\n'
+    _err "DHCP failed on all interfaces."
+    _dim "  Your NIC may need firmware not included in this ISO."
+    _dim "  Options:"
+    printf '%b  [1]%b Retry DHCP\n' "$OR" "$RST"
+    printf '%b  [2]%b Configure static IP\n' "$OR" "$RST"
+    printf '%b  [3]%b Skip networking (no package install — advanced)\n' "$OR" "$RST"
+    printf '\n'
+    _ask "  Choice [1]: "
+    read -r _NET_CHOICE
+    case "${_NET_CHOICE:-1}" in
+        2)
+            _ask "  IP address (e.g. 192.168.1.50): "; read -r _IP
+            _ask "  Netmask (e.g. 255.255.255.0):  "; read -r _MASK
+            _ask "  Gateway:                        "; read -r _GW
+            _ask "  Interface [$( ls /sys/class/net/ | grep -v lo | head -1)]: "
+            read -r _IFACE
+            _IFACE="${_IFACE:-$(ls /sys/class/net/ | grep -v lo | head -1)}"
+            ip addr add "${_IP}/${_MASK}" dev "$_IFACE" 2>/dev/null || true
+            ip route add default via "$_GW" 2>/dev/null || true
+            printf 'nameserver 1.1.1.1\n' > /etc/resolv.conf
+            ;;
+        3) _dim "  Skipping network — continuing without package installation."; sleep 2 ;;
+        *) # Retry
+            for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+                udhcpc -i "$_iface" -q 2>/dev/null || true
+            done ;;
+    esac
+fi
+
+_IP_CURRENT=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || echo "none")
+_ok "Network: IP = ${_IP_CURRENT}"
+
+apk update >>"$LOG" 2>&1 || { _err "Cannot reach package repo. Log: $LOG"; sleep 5; }
+apk add --quiet parted e2fsprogs dosfstools util-linux >>"$LOG" 2>&1 || true
 
 step 2 "Setting up keyboard..."
 setup-keymap "$KB" "$KB" >&3 2>&3 || true
