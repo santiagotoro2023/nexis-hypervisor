@@ -48,18 +48,38 @@ _confirm() {
     printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/community\n'
 } > /etc/apk/repositories
 
-# Load common NIC kernel modules (udev may not have loaded them yet)
+# Load NIC kernel modules
 for _mod in virtio_net virtio_pci e1000 e1000e r8169 8139too vmxnet3 \
             bnx2 tg3 igb ixgbe mlx5_core be2net pcnet32; do
     modprobe "$_mod" 2>/dev/null || true
 done
-sleep 5  # give udev time to create /sys/class/net entries
 
-# Bring up every interface and run DHCP on each (udhcpc needs -i IFACE)
-for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
-    ip link set "$_iface" up 2>/dev/null || true
-    udhcpc -i "$_iface" -b -q 2>/dev/null || true
+# On Alpine, mdev -s rescans sysfs so the kernel registers new devices in
+# /sys/class/net. Without this, VMware/bare-metal NICs can stay invisible
+# even after their module loads. PCI rescan forces the bus to re-probe.
+mdev -s 2>/dev/null || true
+echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+
+# Poll for any non-loopback interface to appear (up to 15 s)
+_waited=0
+while [ $_waited -lt 15 ]; do
+    _nifaces=$(ip -o link show 2>/dev/null | grep -vc 'LOOPBACK')
+    [ "$_nifaces" -gt 0 ] && break
+    sleep 1; _waited=$((_waited + 1))
 done
+
+# Bring up every non-loopback interface and attempt DHCP
+for _iface in $(ip -o link show 2>/dev/null | grep -v 'LOOPBACK' | awk -F': ' '{print $2}'); do
+    ip link set "$_iface" up 2>/dev/null || true
+    udhcpc -i "$_iface" -n -q -t 5 2>/dev/null || true
+done
+
+# If we got any network, pull kbd-bkeymaps NOW — before the keyboard prompt —
+# so loadkmap is guaranteed to have .bmap.gz files regardless of apkovl state.
+if ip route get 1.1.1.1 >/dev/null 2>&1; then
+    apk update -q 2>/dev/null || true
+    apk add -q kbd-bkeymaps 2>/dev/null || true
+fi
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 _header
@@ -101,21 +121,17 @@ case "$KB_NUM" in
 esac
 
 # Apply keyboard NOW so password entry is correct.
-# Alpine stores bmap files gzipped (.bmap.gz) — pipe through zcat for loadkmap.
+# BusyBox loadkmap reads .bmap.gz directly (gzip support built in) — no zcat needed.
 _kb_applied=0
 for _bmap in \
     "/usr/share/bkeymaps/${KB_DIR}/${KB}.bmap.gz" \
     "/usr/share/bkeymaps/${KB_DIR}/${KB}-latin1.bmap.gz" \
     "/usr/share/bkeymaps/${KB_DIR}/${KB_DIR}.bmap.gz" \
     "/usr/share/bkeymaps/${KB_DIR}/${KB}.bmap" \
-    "/usr/share/bkeymaps/${KB}.bmap.gz" \
-    "/usr/share/bkeymaps/${KB}.bmap"
+    "/usr/share/bkeymaps/${KB}.bmap.gz"
 do
     [ -f "$_bmap" ] || continue
-    case "$_bmap" in
-        *.gz) zcat "$_bmap" 2>/dev/null | loadkmap 2>/dev/null && _kb_applied=1 && break ;;
-        *)    loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break ;;
-    esac
+    loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break
 done
 if [ "$_kb_applied" -eq 0 ]; then
     timeout 2 loadkeys "$KB" >/dev/null 2>&1 && _kb_applied=1 || true
@@ -235,15 +251,15 @@ step() { printf '%b  [%s/8]%b  %s\n' "$OR" "$1" "$RST" "$2"; }
 run()  { "$@" >>"$LOG" 2>&1; }
 
 step 1 "Configuring network..."
-# Show detected interfaces
-_ifaces=$(ls /sys/class/net/ 2>/dev/null | grep -v lo | tr '\n' ' ')
+# ip -o link show lists kernel-registered interfaces reliably (no mdev dependency)
+_ifaces=$(ip -o link show 2>/dev/null | grep -v 'LOOPBACK' | awk -F': ' '{print $2}' | tr '\n' ' ')
 _dim "  Detected interfaces: ${_ifaces:-none}"
 
 # Retry DHCP on each interface, up to 60 s
 _tries=0
 _got_ip=0
 while [ $_got_ip -eq 0 ] && [ $_tries -lt 20 ]; do
-    for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+    for _iface in $(ip -o link show 2>/dev/null | grep -v 'LOOPBACK' | awk -F': ' '{print $2}'); do
         ip link set "$_iface" up 2>/dev/null || true
         udhcpc -i "$_iface" -n -q 2>/dev/null && _got_ip=1 && break
     done
@@ -269,16 +285,16 @@ if [ $_got_ip -eq 0 ]; then
             _ask "  IP address (e.g. 192.168.1.50): "; read -r _IP
             _ask "  Netmask (e.g. 255.255.255.0):  "; read -r _MASK
             _ask "  Gateway:                        "; read -r _GW
-            _ask "  Interface [$( ls /sys/class/net/ | grep -v lo | head -1)]: "
+            _ask "  Interface [$(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}' | head -1)]: "
             read -r _IFACE
-            _IFACE="${_IFACE:-$(ls /sys/class/net/ | grep -v lo | head -1)}"
+            _IFACE="${_IFACE:-$(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}' | head -1)}"
             ip addr add "${_IP}/${_MASK}" dev "$_IFACE" 2>/dev/null || true
             ip route add default via "$_GW" 2>/dev/null || true
             printf 'nameserver 1.1.1.1\n' > /etc/resolv.conf
             ;;
         3) _dim "  Skipping network — continuing without package installation."; sleep 2 ;;
         *) # Retry
-            for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+            for _iface in $(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}'); do
                 udhcpc -i "$_iface" -q 2>/dev/null || true
             done ;;
     esac
@@ -351,10 +367,12 @@ chroot /mnt rc-update add sshd default >&3 2>&3 || true
 chroot /mnt rc-update add networking default >&3 2>&3 || true
 chroot /mnt rc-update add modules boot >&3 2>&3 || true
 
-# Keyboard: write Alpine-native keymap config (NOT systemd vconsole.conf)
+# Keyboard: Alpine uses the 'loadkmap' OpenRC service (from busybox-openrc,
+# included in alpine-base). Config is a full path to the .bmap.gz file.
+# 'keymaps' is the kbd/systemd name — wrong for Alpine.
 mkdir -p /mnt/etc/conf.d
-printf 'keymap="%s"\n' "$KB" > /mnt/etc/conf.d/keymaps
-chroot /mnt rc-update add keymaps boot >&3 2>&3 || true
+printf 'KEYMAP=/usr/share/bkeymaps/%s/%s.bmap.gz\n' "$KB_DIR" "$KB" > /mnt/etc/conf.d/loadkmap
+chroot /mnt rc-update add loadkmap boot >&3 2>&3 || true
 
 [ -n "$CTRL" ] && {
     mkdir -p /mnt/etc/nexis-hypervisor

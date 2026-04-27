@@ -94,18 +94,28 @@ cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$APKOVL_DIR/opt/nexis-instal
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$APKOVL_DIR/opt/nexis-installer/"
 cp "$SCRIPT_DIR/nexis-shell.py"                    "$APKOVL_DIR/opt/nexis-installer/"
 
-# Bundle keyboard bmap files into the apkovl so loadkmap works immediately
-# without needing internet. Download the kbd-bkeymaps package from Alpine CDN.
+# Bundle keyboard bmap files into the apkovl — bonus for offline/fast keyboard.
+# Primary path is 'apk add kbd-bkeymaps' at installer runtime (guaranteed).
 _print "Bundling keyboard bmap files…"
-BMAP_PKG=$(curl -sSL "${ALPINE_MIRROR}/../../../latest-stable/main/x86_64/" \
-    | grep -oP 'kbd-bkeymaps-[\d.r-]+\.apk' | head -1 || true)
+_BMAP_BASE="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64"
+BMAP_PKG=$(curl -fsSL "${_BMAP_BASE}/" 2>/dev/null \
+    | grep -oE 'kbd-bkeymaps-[^"]+\.apk' | head -1 || true)
 if [[ -n "$BMAP_PKG" ]]; then
-    curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/${BMAP_PKG}" \
-        -o "$WORK_DIR/kbd-bkeymaps.apk" 2>/dev/null \
-    && tar xzf "$WORK_DIR/kbd-bkeymaps.apk" -C "$APKOVL_DIR" 2>/dev/null || true
-    _ok "Keyboard bmap files bundled ($(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap*' 2>/dev/null | wc -l) layouts)"
+    curl -fsSL "${_BMAP_BASE}/${BMAP_PKG}" -o "$WORK_DIR/kbd-bkeymaps.apk" 2>/dev/null || true
+    if [[ -f "$WORK_DIR/kbd-bkeymaps.apk" ]]; then
+        mkdir -p "$APKOVL_DIR/usr/share/bkeymaps"
+        tar xzf "$WORK_DIR/kbd-bkeymaps.apk" -C "$APKOVL_DIR" 2>/dev/null || true
+        _COUNT=$(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap.gz' 2>/dev/null | wc -l)
+        if [[ $_COUNT -gt 0 ]]; then
+            _ok "Keyboard bmap files bundled ($_COUNT .bmap.gz layouts in apkovl)"
+        else
+            _ok "kbd-bkeymaps.apk extracted but no .bmap.gz found — will fetch at install time"
+        fi
+    else
+        _ok "kbd-bkeymaps download failed — will fetch at install time via apk"
+    fi
 else
-    _ok "kbd-bkeymaps not found on CDN — keyboard applies on installed system"
+    _ok "kbd-bkeymaps not found on CDN — will fetch at install time via apk"
 fi
 
 # Pack the overlay (Alpine expects HOSTNAME.apkovl.tar.gz; default hostname = localhost)
