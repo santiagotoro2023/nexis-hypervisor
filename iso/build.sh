@@ -94,6 +94,20 @@ cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$APKOVL_DIR/opt/nexis-instal
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$APKOVL_DIR/opt/nexis-installer/"
 cp "$SCRIPT_DIR/nexis-shell.py"                    "$APKOVL_DIR/opt/nexis-installer/"
 
+# Bundle keyboard bmap files into the apkovl so loadkmap works immediately
+# without needing internet. Download the kbd-bkeymaps package from Alpine CDN.
+_print "Bundling keyboard bmap files…"
+BMAP_PKG=$(curl -sSL "${ALPINE_MIRROR}/../../../latest-stable/main/x86_64/" \
+    | grep -oP 'kbd-bkeymaps-[\d.r-]+\.apk' | head -1 || true)
+if [[ -n "$BMAP_PKG" ]]; then
+    curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/${BMAP_PKG}" \
+        -o "$WORK_DIR/kbd-bkeymaps.apk" 2>/dev/null \
+    && tar xzf "$WORK_DIR/kbd-bkeymaps.apk" -C "$APKOVL_DIR" 2>/dev/null || true
+    _ok "Keyboard bmap files bundled ($(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap' 2>/dev/null | wc -l) layouts)"
+else
+    _ok "kbd-bkeymaps not found on CDN — keyboard applies on installed system"
+fi
+
 # Pack the overlay (Alpine expects HOSTNAME.apkovl.tar.gz; default hostname = localhost)
 _print "Building apkovl overlay…"
 ( cd "$APKOVL_DIR" && tar czf "$WORK_DIR/localhost.apkovl.tar.gz" . )
@@ -112,7 +126,11 @@ _ok "/nexis/ staged on ISO"
 # Keep Alpine's required kernel params (modules= alpine_dev=) for USB boot.
 # Add nomodeset to prevent nouveau crashing on NVIDIA hardware.
 
-KPARAMS="modules=loop,squashfs,sd-mod,usb-storage quiet nomodeset console=tty1 alpine_dev=autodetect"
+# modules= tells Alpine's initramfs which kernel modules to load at boot.
+# virtio_pci MUST be in this list for VMs — without it the VirtIO PCI bus
+# is never scanned and virtio_net/virtio_blk are never registered.
+# ahci,sd-mod,nvme cover common bare-metal disk controllers.
+KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,ahci,nvme nomodeset alpine_dev=autodetect"
 
 for grub_cfg in \
     "$ISO_SRC/boot/grub/grub.cfg" \
