@@ -363,9 +363,13 @@ chroot /mnt ssh-keygen -A >&3 2>&3 || true
 chroot /mnt rc-update add sshd default >&3 2>&3 || true
 chroot /mnt rc-update add networking default >&3 2>&3 || true
 chroot /mnt rc-update add chronyd default >&3 2>&3 || true
-# hwclock races with RTC device init on kernel 6.18+ in VMs and hangs boot.
-# chrony handles time sync via NTP once network is up — hwclock not needed.
-chroot /mnt rc-update del hwclock boot >&3 2>&3 || true
+# hwclock hangs indefinitely on kernel 6.18+ (VMware ESXi + bare-metal) because
+# /dev/rtc0 is not ready when sysinit runs. Alpine puts hwclock in sysinit, not
+# boot, so rc-update del hwclock boot silently does nothing. Remove the symlinks
+# directly from every runlevel to guarantee it never runs.
+rm -f /mnt/etc/runlevels/sysinit/hwclock
+rm -f /mnt/etc/runlevels/boot/hwclock
+rm -f /mnt/etc/runlevels/default/hwclock
 
 # Keyboard: Alpine uses the 'loadkmap' OpenRC service (from busybox-openrc,
 # included in alpine-base). Config is a full path to the .bmap.gz file.
