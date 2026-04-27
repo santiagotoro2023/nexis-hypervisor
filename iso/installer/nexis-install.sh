@@ -48,6 +48,13 @@ _confirm() {
     printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/community\n'
 } > /etc/apk/repositories
 
+# Load common NIC kernel modules (udev may not have loaded them yet)
+for _mod in virtio_net virtio_pci e1000 e1000e r8169 8139too vmxnet3 \
+            bnx2 tg3 igb ixgbe mlx5_core be2net; do
+    modprobe "$_mod" 2>/dev/null || true
+done
+sleep 2  # give udev time to create /sys/class/net entries
+
 # Bring up every interface and run DHCP on each (udhcpc needs -i IFACE)
 for _iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
     ip link set "$_iface" up 2>/dev/null || true
@@ -81,18 +88,21 @@ _ask "  Select [1-9,0, default=1]: "
 read -r KB_NUM
 
 case "$KB_NUM" in
-    2) KB="ch"    ;;
-    3) KB="ch-de" ;;
-    4) KB="de"    ;;
-    5) KB="fr_CH" ;;
-    6) KB="fr"    ;;
-    7) KB="gb"    ;;
-    8) KB="es"    ;;
-    9) KB="it"    ;;
-    0) KB="pt"    ;;
-    *) KB="us"    ;;
+    2) KB="ch";    KB_VARIANT="de" ;;
+    3) KB="ch";    KB_VARIANT="de" ;;
+    4) KB="de";    KB_VARIANT="de" ;;
+    5) KB="fr_CH"; KB_VARIANT="fr" ;;
+    6) KB="fr";    KB_VARIANT="fr" ;;
+    7) KB="gb";    KB_VARIANT="gb" ;;
+    8) KB="es";    KB_VARIANT="es" ;;
+    9) KB="it";    KB_VARIANT="it" ;;
+    0) KB="pt";    KB_VARIANT="pt" ;;
+    *) KB="us";    KB_VARIANT="us" ;;
 esac
-_ok "Keyboard: $KB"
+
+# Apply keyboard NOW so password entry uses the correct layout
+setup-keymap "$KB" "$KB_VARIANT" >/dev/null 2>&1 || true
+_ok "Keyboard: $KB ($KB_VARIANT) — active now"
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
 _header
@@ -257,8 +267,10 @@ _ok "Network: IP = ${_IP_CURRENT}"
 apk update >>"$LOG" 2>&1 || { _err "Cannot reach package repo. Log: $LOG"; sleep 5; }
 apk add --quiet parted e2fsprogs dosfstools util-linux >>"$LOG" 2>&1 || true
 
-step 2 "Setting up keyboard..."
-setup-keymap "$KB" "$KB" >&3 2>&3 || true
+step 2 "Writing keyboard config to installed system..."
+mkdir -p /mnt/etc
+printf 'KEYMAP=%s\nXKBLAYOUT=%s\nXKBVARIANT=%s\n' \
+    "$KB" "$KB" "$KB_VARIANT" > /mnt/etc/vconsole.conf 2>/dev/null || true
 
 step 3 "Partitioning $DISK..."
 run parted -s "$DISK" mklabel gpt
