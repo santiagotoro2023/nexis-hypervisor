@@ -77,13 +77,24 @@ cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$INITRD_DIR/opt/nexis-instal
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$INITRD_DIR/opt/nexis-installer/"
 _ok "Installer staged"
 
-# Auto-start installer via getty: -n (no login prompt) -l (login program)
-# getty sets up the terminal properly before exec-ing our installer.
+# Auto-login root on tty1, then .profile launches the installer.
+# -a root: BusyBox getty auto-login flag (more reliable than -l for our use).
 if [[ -f "$INITRD_DIR/etc/inittab" ]]; then
-    sed -i 's|tty1::.*getty.*|tty1::respawn:/sbin/getty -n -l /usr/local/bin/nexis-install 0 tty1|' \
+    # Replace the tty1 line with auto-login
+    sed -i 's|^tty1::.*|tty1::respawn:/sbin/getty -a root -L 0 tty1|' \
         "$INITRD_DIR/etc/inittab"
-    _ok "inittab patched"
+    _ok "inittab: auto-login root on tty1"
 fi
+
+# Root .profile: exec installer when on tty1
+mkdir -p "$INITRD_DIR/root"
+cat > "$INITRD_DIR/root/.profile" << 'PROFILE'
+export TERM=linux
+if [ "$(tty 2>/dev/null)" = "/dev/tty1" ] && [ -x /usr/local/bin/nexis-install ]; then
+    exec /usr/local/bin/nexis-install
+fi
+PROFILE
+_ok ".profile: installer auto-start on tty1"
 
 # ── 5. Repack initramfs ───────────────────────────────────────────────────────
 
@@ -97,6 +108,7 @@ _ok "initramfs repacked ($(du -h "$INITRAMFS" | cut -f1))"
 mkdir -p "$ISO_SRC/nexis"
 cp "$SCRIPT_DIR/installer/nexis-install-alpine.sh" "$ISO_SRC/nexis/install.sh"
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ISO_SRC/nexis/"
+cp "$SCRIPT_DIR/nexis-shell.py"                    "$ISO_SRC/nexis/"
 _ok "/nexis/ staged on ISO"
 
 # ── 7. GRUB config (UEFI) — single entry, NeXiS branding ────────────────────

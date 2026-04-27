@@ -120,7 +120,47 @@ table inet nexis {
 NFT
 _run rc-service nftables restart || true
 
-# ── 10. Mark complete ─────────────────────────────────────────────────────────
+# ── 10. NeXiS management shell ───────────────────────────────────────────────
+
+_log "Installing NeXiS management shell..."
+
+# Copy from source repo or ISO media
+SHELL_SRC=""
+for p in \
+    /media/cdrom/nexis/nexis-shell.py \
+    /media/usb/nexis/nexis-shell.py \
+    /opt/nexis-hypervisor/iso/nexis-shell.py
+do
+    [ -f "$p" ] && { SHELL_SRC="$p"; break; }
+done
+
+if [ -n "$SHELL_SRC" ]; then
+    cp "$SHELL_SRC" /usr/local/bin/nexis-shell
+else
+    curl -fsSL \
+        https://raw.githubusercontent.com/santiagotoro2023/nexis-hypervisor/main/iso/nexis-shell.py \
+        -o /usr/local/bin/nexis-shell >> "$LOG" 2>&1 || true
+fi
+chmod +x /usr/local/bin/nexis-shell
+ln -sf /usr/local/bin/nexis-shell /usr/local/bin/nexis
+
+# Auto-login root on tty1
+grep -q '^tty1::' /etc/inittab 2>/dev/null && \
+    sed -i 's|^tty1::.*|tty1::respawn:/sbin/getty -a root -L 0 tty1|' /etc/inittab
+
+# Root profile: show nexis-shell on console, plain shell elsewhere
+cat > /root/.profile << 'PROFILE'
+export TERM=linux
+alias nexis='/usr/local/bin/nexis-shell'
+if [ "$(tty 2>/dev/null)" = "/dev/tty1" ] && [ -x /usr/local/bin/nexis-shell ]; then
+    /usr/local/bin/nexis-shell
+    printf '\n\033[38;5;208m  Returned to Linux shell. Type nexis to re-enter.\033[0m\n'
+fi
+PROFILE
+
+_log "NeXiS shell installed"
+
+# ── 11. Start daemon ──────────────────────────────────────────────────────────
 
 _log "Starting NeXiS Hypervisor daemon…"
 _run rc-service nexis-hypervisor start || true
