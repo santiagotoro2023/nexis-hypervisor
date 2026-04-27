@@ -123,9 +123,13 @@ d-i passwd/root-login                  boolean true
 d-i passwd/root-password-crypted       password ${ROOT_HASH:-\$6\$rounds=656000\$placeholder\$placeholder}
 d-i passwd/make-user                   boolean false
 
-tasksel tasksel/first                  multiselect standard, ssh-server
+# Minimal task set — no desktop, no printing, no bluetooth
+# ssh-server for remote access; everything else is installed by nexis install.sh
+tasksel tasksel/first                  multiselect minimal, ssh-server
 d-i pkgsel/include                     string  \
-    curl git python3 python3-pip python3-venv ca-certificates
+    curl git python3 python3-pip python3-venv ca-certificates \
+    sudo htop vim-tiny
+d-i pkgsel/upgrade                     select  safe-upgrade
 
 d-i grub-installer/only_debian         boolean true
 d-i grub-installer/bootdev             string  default
@@ -138,7 +142,9 @@ d-i preseed/late_command               string  \
     chmod +x /target/opt/nexis-install.sh /target/usr/local/bin/nexis-firstboot ; \
     cp /cdrom/nexis/nexis-install.service   /target/etc/systemd/system/    ; \
     cp /cdrom/nexis/nexis-firstboot.service /target/etc/systemd/system/    ; \
-    in-target systemctl enable nexis-install.service nexis-firstboot.service ssh
+    in-target systemctl enable nexis-install.service nexis-firstboot.service ssh ; \
+    in-target systemctl disable bluetooth ModemManager avahi-daemon 2>/dev/null || true ; \
+    in-target systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
 
 d-i finish-install/reboot_in_progress  note
 PRESEED
@@ -191,8 +197,7 @@ EOF
 # auto=true priority=critical: runs installer headlessly.
 # quiet: suppresses kernel noise; installer output still shows.
 
-KPARAMS_AUTO="auto=true priority=critical file=/cdrom/nexis/preseed.cfg nomodeset"
-KPARAMS_MANUAL="nomodeset"
+KPARAMS="auto=true priority=critical file=/cdrom/nexis/preseed.cfg nomodeset"
 
 for grub_cfg in \
     "$ISO_SRC/boot/grub/grub.cfg" \
@@ -202,18 +207,14 @@ do
     cat > "$grub_cfg" << EOF
 # NeXiS Hypervisor ${VERSION}
 set default=0
-set timeout=8
+set timeout=5
 set color_normal=light-gray/black
 set color_highlight=yellow/black
 set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux   /install.amd/vmlinuz ${KPARAMS_AUTO} ---
-    initrd  /install.amd/initrd.gz
-}
-menuentry "Debian installer  [manual — no preseed]" {
-    linux   /install.amd/vmlinuz ${KPARAMS_MANUAL} ---
+    linux   /install.amd/vmlinuz ${KPARAMS} ---
     initrd  /install.amd/initrd.gz
 }
 EOF
@@ -230,11 +231,7 @@ default nexis
 label nexis
     menu label Install NeXiS Hypervisor ${VERSION}
     kernel /install.amd/vmlinuz
-    append ${KPARAMS_AUTO} initrd=/install.amd/initrd.gz ---
-label manual
-    menu label Debian installer  [manual]
-    kernel /install.amd/vmlinuz
-    append ${KPARAMS_MANUAL} initrd=/install.amd/initrd.gz ---
+    append ${KPARAMS} initrd=/install.amd/initrd.gz ---
 EOF
     _ok "syslinux: $TXT_CFG"
 fi
