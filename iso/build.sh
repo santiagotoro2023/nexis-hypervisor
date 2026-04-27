@@ -34,9 +34,11 @@ _cleanup() {
 trap _cleanup EXIT
 
 _print "Installing build dependencies..."
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -yq \
+apt-get install -y --no-install-recommends \
     debootstrap \
+    debian-archive-keyring \
     squashfs-tools \
     xorriso \
     grub-common \
@@ -51,8 +53,9 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 ROOTFS="$WORK_DIR/rootfs"
 _print "Bootstrapping Debian 12 (bookworm)..."
 if [[ ! -f "$ROOTFS/usr/bin/dpkg" ]]; then
-    debootstrap --arch=amd64 --variant=minbase bookworm "$ROOTFS" \
-        http://deb.debian.org/debian
+    # --no-check-gpg avoids GPG key failures on non-Debian build hosts
+    debootstrap --arch=amd64 --variant=minbase --no-check-gpg \
+        bookworm "$ROOTFS" http://deb.debian.org/debian
 fi
 _ok "Base: $(du -sh "$ROOTFS" | cut -f1)"
 
@@ -77,8 +80,10 @@ chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 
 _print "Installing live system packages..."
 chroot "$ROOTFS" /bin/bash << 'CHROOTEOF'
+set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+# live-boot must be installed before linux-image so update-initramfs picks up live hooks
 apt-get install -y --no-install-recommends live-boot
 apt-get install -y --no-install-recommends \
     linux-image-amd64 \
@@ -175,8 +180,8 @@ _print "Building squashfs..."
 mksquashfs "$ROOTFS" "$ISO_SRC/live/filesystem.squashfs" -comp xz -e boot
 _ok "squashfs: $(du -h "$ISO_SRC/live/filesystem.squashfs" | cut -f1)"
 
-VMLINUZ=$(ls "$ROOTFS/boot/vmlinuz-"*    | sort | tail -1)
-INITRD=$(ls  "$ROOTFS/boot/initrd.img-"* | sort | tail -1)
+VMLINUZ=$(find "$ROOTFS/boot" -maxdepth 1 -name 'vmlinuz-*'    | sort | tail -1)
+INITRD=$(find  "$ROOTFS/boot" -maxdepth 1 -name 'initrd.img-*' | sort | tail -1)
 [[ -f "$VMLINUZ" ]] || _err "vmlinuz not found — linux-image install failed"
 [[ -f "$INITRD"  ]] || _err "initrd not found — update-initramfs failed"
 cp "$VMLINUZ" "$ISO_SRC/live/vmlinuz"
@@ -215,7 +220,7 @@ _ok "GRUB config written"
 
 _print "Building ISO..."
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
-grub-mkrescue -o "$FINAL" "$ISO_SRC" -- -r -V "$ISO_VOLUME" -J --joliet-long
+grub-mkrescue -o "$FINAL" "$ISO_SRC" -- -V "$ISO_VOLUME"
 
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"
