@@ -333,7 +333,7 @@ printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/main\nhttps://dl-cdn
 
 apk --root /mnt --initdb add --quiet \
     alpine-base linux-lts linux-firmware openrc \
-    grub grub-efi efibootmgr openssh \
+    grub grub-efi efibootmgr openssh chrony \
     kbd-bkeymaps python3 py3-pip curl git sudo \
     >>"$LOG" 2>&1 || { _err "Package install failed — check internet. Log: $LOG"; sleep 10; exit 1; }
 
@@ -348,14 +348,8 @@ printf 'UUID=%s\t/\t\text4\tnoatime,errors=remount-ro\t0\t1\n' "$ROOT_UUID" > /m
 printf 'UUID=%s\t/boot/efi\tvfat\tumask=0077\t0\t2\n' "$EFI_UUID" >> /mnt/etc/fstab
 
 # Detect the live NIC name so the installed system uses the right interface.
-# Alpine doesn't use predictable names by default so eth0 is standard,
-# but if e1000 is the first module to register it may appear as enp* on some kernels.
-_primary_iface=$(ls /sys/class/net/ 2>/dev/null | grep -v lo | head -1)
+_primary_iface=$(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}' | head -1)
 _primary_iface="${_primary_iface:-eth0}"
-
-# Load NIC drivers at boot on the installed system — prevents a race where
-# OpenRC networking starts before udev/mdev has loaded the NIC module.
-printf 'e1000\ne1000e\nr8169\nvirtio_net\nvirtio_pci\nigb\nvmxnet3\n' > /mnt/etc/modules
 
 {
     printf 'auto lo\niface lo inet loopback\n\n'
@@ -368,7 +362,7 @@ chroot /mnt setup-timezone -z UTC >&3 2>&3 || true
 chroot /mnt ssh-keygen -A >&3 2>&3 || true
 chroot /mnt rc-update add sshd default >&3 2>&3 || true
 chroot /mnt rc-update add networking default >&3 2>&3 || true
-chroot /mnt rc-update add modules boot >&3 2>&3 || true
+chroot /mnt rc-update add chronyd default >&3 2>&3 || true
 
 # Keyboard: Alpine uses the 'loadkmap' OpenRC service (from busybox-openrc,
 # included in alpine-base). Config is a full path to the .bmap.gz file.
