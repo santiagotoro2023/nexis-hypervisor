@@ -191,7 +191,7 @@ EOF
 # auto=true priority=critical: runs installer headlessly.
 # quiet: suppresses kernel noise; installer output still shows.
 
-KPARAMS_AUTO="auto=true priority=critical file=/cdrom/nexis/preseed.cfg nomodeset quiet"
+KPARAMS_AUTO="auto=true priority=critical file=/cdrom/nexis/preseed.cfg nomodeset"
 KPARAMS_MANUAL="nomodeset"
 
 for grub_cfg in \
@@ -274,4 +274,5 @@ _ok "ISO: $FINAL"
 _ok "Size: $(du -h "$FINAL" | cut -f1)"
 _ok "SHA256: $SHA"
 _print "Write: dd if=$(basename "$FINAL") of=/dev/sdX bs=4M status=progress && sync"
-_print "Boot: select 'Install NeXiS Hypervisor' — installation runs automatically (~15 min)"
+_print "Boot: select 'Install NeXiS Hypervisor' and WAIT ~15 min — reboots automatically when done"
+_print "The screen may show black or text scroll during install — this is normal, do not power off"
