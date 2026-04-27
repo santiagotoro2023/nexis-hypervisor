@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# NeXiS Hypervisor — ISO Builder
+# NeXiS Hypervisor — ISO Builder (Debian 12)
 #
-# Downloads Alpine Linux extended ISO, injects the NeXiS installer via apkovl,
-# patches boot menu. The installer itself installs Debian 12 to the target disk.
+# Builds a bootable Debian 12 live ISO with our TUI installer.
+# Runs on ubuntu-latest with sudo — full capabilities, no container limits.
 #
-# Boot:    GRUB/syslinux → Alpine live (network + hardware drivers included)
-# Install: NeXiS TUI → debootstrap Debian 12 → systemd services → reboot
+# Boot:    GRUB (BIOS+UEFI) → Debian live → nexis-install TUI
+# Install: debootstrap Debian 12 → systemd → NeXiS services → reboot
 set -euo pipefail
 
 VERSION="${NEXIS_VERSION:-1.0.0}"
@@ -14,119 +14,188 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/.work"
 ISO_VOLUME="NEXIS_HV_${VERSION//./_}"
 
-ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64"
-
 _print() { printf '\033[38;5;208m[nexis]\033[0m %s\n' "$1"; }
 _ok()    { printf '\033[38;5;46m  ok\033[0m %s\n'    "$1"; }
 _err()   { printf '\033[38;5;196m  err\033[0m %s\n'  "$1" >&2; exit 1; }
 
-[[ $EUID -ne 0 ]] && _err "run as root"
-apt-get install -yq xorriso cpio gzip curl 2>/dev/null | tail -1
+[[ $EUID -ne 0 ]] && _err "run as root (use: sudo -E bash iso/build.sh)"
+
+ROOTFS_MOUNTS_DONE=0
+_cleanup() {
+    if [[ $ROOTFS_MOUNTS_DONE -eq 1 ]]; then
+        local rf="$WORK_DIR/rootfs"
+        umount "$rf/dev/pts" 2>/dev/null || true
+        umount "$rf/dev"     2>/dev/null || true
+        umount "$rf/run"     2>/dev/null || true
+        umount "$rf/sys"     2>/dev/null || true
+        umount "$rf/proc"    2>/dev/null || true
+    fi
+}
+trap _cleanup EXIT
+
+_print "Installing build dependencies..."
+apt-get update -qq
+apt-get install -yq \
+    debootstrap \
+    squashfs-tools \
+    xorriso \
+    grub-common \
+    grub-efi-amd64-bin \
+    grub-pc-bin \
+    mtools
+
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
-# ── 1. Download Alpine extended ISO ──────────────────────────────────────────
+# ── 1. Bootstrap Debian 12 ───────────────────────────────────────────────────
 
-ALPINE_ISO="$WORK_DIR/alpine.iso"
-if [[ ! -f "$ALPINE_ISO" ]]; then
-    _print "Finding Alpine ISO filename..."
-    FNAME=$(curl -sSL "${ALPINE_MIRROR}/" \
-        | grep -oP 'alpine-extended-[\d.]+-x86_64\.iso' | head -1 || true)
-    [[ -z "$FNAME" ]] && _err "Could not find Alpine ISO at $ALPINE_MIRROR"
-    _print "Downloading $FNAME..."
-    curl -fL "${ALPINE_MIRROR}/${FNAME}" -o "$ALPINE_ISO"
-    _ok "$FNAME ($(du -h "$ALPINE_ISO" | cut -f1))"
+ROOTFS="$WORK_DIR/rootfs"
+_print "Bootstrapping Debian 12 (bookworm)..."
+if [[ ! -f "$ROOTFS/usr/bin/dpkg" ]]; then
+    debootstrap --arch=amd64 --variant=minbase bookworm "$ROOTFS" \
+        http://deb.debian.org/debian
 fi
+_ok "Base: $(du -sh "$ROOTFS" | cut -f1)"
 
-# ── 2. Extract ISO ────────────────────────────────────────────────────────────
+# ── 2. Bind-mount for chroot ──────────────────────────────────────────────────
+# ubuntu-latest runner has full root + all capabilities — mount works fine.
+
+_print "Preparing chroot..."
+mkdir -p "$ROOTFS"/{proc,sys,dev,run}
+mount -t proc   proc     "$ROOTFS/proc"
+mount -t sysfs  sysfs    "$ROOTFS/sys"
+mount --bind    /dev     "$ROOTFS/dev"
+mount --bind    /dev/pts "$ROOTFS/dev/pts" 2>/dev/null || true
+mount --bind    /run     "$ROOTFS/run"
+ROOTFS_MOUNTS_DONE=1
+
+# Prevent dpkg postinst from trying to start services during install
+printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
+chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
+
+# ── 3. Install live system packages ──────────────────────────────────────────
+# live-boot MUST come before linux-image so update-initramfs picks up its hooks.
+
+_print "Installing live system packages..."
+chroot "$ROOTFS" /bin/bash << 'CHROOTEOF'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y --no-install-recommends live-boot
+apt-get install -y --no-install-recommends \
+    linux-image-amd64 \
+    systemd systemd-sysv \
+    whiptail \
+    parted \
+    dosfstools e2fsprogs \
+    iproute2 \
+    dhcpcd5 \
+    grub-efi-amd64-bin grub-pc-bin \
+    efibootmgr \
+    curl \
+    debootstrap \
+    kbd \
+    python3 \
+    kmod \
+    pciutils \
+    util-linux \
+    ca-certificates
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+CHROOTEOF
+_ok "Packages: $(du -sh "$ROOTFS" | cut -f1)"
+
+# ── 4. Configure live system ──────────────────────────────────────────────────
+
+_print "Configuring live system..."
+
+echo "nexis-installer" > "$ROOTFS/etc/hostname"
+
+cat > "$ROOTFS/etc/apt/sources.list" << 'EOF'
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security bookworm-security main
+EOF
+
+chroot "$ROOTFS" passwd -d root 2>/dev/null || true
+rm -f "$ROOTFS/usr/sbin/policy-rc.d"
+
+# systemd-networkd: DHCP on all Ethernet (any interface name — e1000, virtio, vmxnet3…)
+mkdir -p "$ROOTFS/etc/systemd/network"
+cat > "$ROOTFS/etc/systemd/network/20-dhcp.network" << 'EOF'
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes
+EOF
+chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null || true
+
+# Auto-login root on tty1 → installer fires immediately
+mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
+cat > "$ROOTFS/etc/systemd/system/getty@tty1.service.d/autologin.conf" << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+Type=idle
+EOF
+
+cat > "$ROOTFS/root/.bash_profile" << 'EOF'
+export TERM=linux
+[ "$(tty)" = "/dev/tty1" ] && exec /usr/local/bin/nexis-install
+EOF
+chmod 600 "$ROOTFS/root/.bash_profile"
+
+cat > "$ROOTFS/etc/sysctl.d/10-quiet.conf" << 'EOF'
+kernel.printk = 3 3 3 3
+EOF
+
+mkdir -p "$ROOTFS/usr/local/bin" "$ROOTFS/opt/nexis-installer"
+cp "$SCRIPT_DIR/installer/nexis-install.sh"        "$ROOTFS/usr/local/bin/nexis-install"
+chmod +x "$ROOTFS/usr/local/bin/nexis-install"
+
+cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$ROOTFS/opt/nexis-installer/install.sh"  2>/dev/null || true
+cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ROOTFS/opt/nexis-installer/"             2>/dev/null || true
+cp "$SCRIPT_DIR/nexis-shell.py"                    "$ROOTFS/opt/nexis-installer/"             2>/dev/null || true
+
+_ok "Live system configured"
+
+# ── 5. Unmount chroot ─────────────────────────────────────────────────────────
+
+umount "$ROOTFS/dev/pts" 2>/dev/null || true
+umount "$ROOTFS/dev"     2>/dev/null || true
+umount "$ROOTFS/run"     2>/dev/null || true
+umount "$ROOTFS/sys"     2>/dev/null || true
+umount "$ROOTFS/proc"    2>/dev/null || true
+ROOTFS_MOUNTS_DONE=0
+
+# ── 6. Build squashfs ─────────────────────────────────────────────────────────
 
 ISO_SRC="$WORK_DIR/iso-src"
-_print "Extracting ISO..."
-rm -rf "$ISO_SRC" && mkdir -p "$ISO_SRC"
-xorriso -osirrox on -indev "$ALPINE_ISO" -extract / "$ISO_SRC/" 2>/dev/null
-chmod -R u+w "$ISO_SRC"
-_ok "Extracted"
+mkdir -p "$ISO_SRC/live"
 
-# ── 3. Build apkovl overlay ───────────────────────────────────────────────────
-# Alpine applies localhost.apkovl.tar.gz from the boot device before getty
-# starts, overlaying files onto the running live system.
+_print "Building squashfs..."
+mksquashfs "$ROOTFS" "$ISO_SRC/live/filesystem.squashfs" -comp xz -e boot
+_ok "squashfs: $(du -h "$ISO_SRC/live/filesystem.squashfs" | cut -f1)"
 
-APKOVL_DIR="$WORK_DIR/apkovl"
-rm -rf "$APKOVL_DIR" && mkdir -p "$APKOVL_DIR"
+VMLINUZ=$(ls "$ROOTFS/boot/vmlinuz-"*    | sort | tail -1)
+INITRD=$(ls  "$ROOTFS/boot/initrd.img-"* | sort | tail -1)
+[[ -f "$VMLINUZ" ]] || _err "vmlinuz not found — linux-image install failed"
+[[ -f "$INITRD"  ]] || _err "initrd not found — update-initramfs failed"
+cp "$VMLINUZ" "$ISO_SRC/live/vmlinuz"
+cp "$INITRD"  "$ISO_SRC/live/initrd.img"
+_ok "Kernel: $(basename "$VMLINUZ")"
+_ok "Initrd: $(basename "$INITRD")"
 
-mkdir -p "$APKOVL_DIR/etc"
-cat > "$APKOVL_DIR/etc/inittab" << 'EOF'
-::sysinit:/sbin/openrc sysinit
-::sysinit:/sbin/openrc boot
-::wait:/sbin/openrc default
-tty1::respawn:/sbin/getty -n -l /usr/local/bin/nexis-install 0 tty1
-tty2::respawn:/sbin/getty 38400 tty2
-tty3::respawn:/sbin/getty 38400 tty3
-tty4::respawn:/sbin/getty 38400 tty4
-tty5::respawn:/sbin/getty 38400 tty5
-tty6::respawn:/sbin/getty 38400 tty6
-::shutdown:/sbin/openrc shutdown
-EOF
-
-mkdir -p "$APKOVL_DIR/root"
-cat > "$APKOVL_DIR/root/.profile" << 'EOF'
-export TERM=linux
-if [ "$(tty 2>/dev/null)" = "/dev/tty1" ] && [ -x /usr/local/bin/nexis-install ]; then
-    exec /usr/local/bin/nexis-install
-fi
-EOF
-
-mkdir -p "$APKOVL_DIR/usr/local/bin"
-cp "$SCRIPT_DIR/installer/nexis-install.sh" "$APKOVL_DIR/usr/local/bin/nexis-install"
-chmod +x "$APKOVL_DIR/usr/local/bin/nexis-install"
-
-mkdir -p "$APKOVL_DIR/opt/nexis-installer"
-cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$APKOVL_DIR/opt/nexis-installer/install.sh"
-cp "$SCRIPT_DIR/firstboot-tui.py"                  "$APKOVL_DIR/opt/nexis-installer/"
-cp "$SCRIPT_DIR/nexis-shell.py"                    "$APKOVL_DIR/opt/nexis-installer/"
-
-# Bundle keyboard bmap files (bonus — installer also fetches via apk if needed)
-_print "Bundling keyboard bmap files..."
-_BMAP_BASE="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64"
-BMAP_PKG=$(curl -fsSL "${_BMAP_BASE}/" 2>/dev/null \
-    | grep -oE 'kbd-bkeymaps-[^"]+\.apk' | head -1 || true)
-if [[ -n "$BMAP_PKG" ]]; then
-    curl -fsSL "${_BMAP_BASE}/${BMAP_PKG}" -o "$WORK_DIR/kbd-bkeymaps.apk" 2>/dev/null || true
-    if [[ -f "$WORK_DIR/kbd-bkeymaps.apk" ]]; then
-        mkdir -p "$APKOVL_DIR/usr/share/bkeymaps"
-        tar xzf "$WORK_DIR/kbd-bkeymaps.apk" -C "$APKOVL_DIR" 2>/dev/null || true
-        _COUNT=$(find "$APKOVL_DIR/usr/share/bkeymaps" -name '*.bmap.gz' 2>/dev/null | wc -l)
-        [[ $_COUNT -gt 0 ]] && _ok "Bundled $_COUNT keyboard layouts" \
-            || _ok "kbd-bkeymaps extracted but empty — will fetch at install time"
-    else
-        _ok "kbd-bkeymaps download failed — will fetch at install time"
-    fi
-else
-    _ok "kbd-bkeymaps not on CDN — will fetch at install time"
-fi
-
-_print "Packing apkovl..."
-( cd "$APKOVL_DIR" && tar czf "$WORK_DIR/localhost.apkovl.tar.gz" . )
-cp "$WORK_DIR/localhost.apkovl.tar.gz" "$ISO_SRC/"
-_ok "apkovl: $(du -h "$ISO_SRC/localhost.apkovl.tar.gz" | cut -f1)"
-
-# ── 4. Stage /nexis/ on ISO ───────────────────────────────────────────────────
+# ── 7. Stage /nexis/ on ISO ───────────────────────────────────────────────────
 
 mkdir -p "$ISO_SRC/nexis"
-cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$ISO_SRC/nexis/install.sh"
-cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ISO_SRC/nexis/"
-cp "$SCRIPT_DIR/nexis-shell.py"                    "$ISO_SRC/nexis/"
-_ok "/nexis/ staged on ISO"
+cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$ISO_SRC/nexis/install.sh"  2>/dev/null || true
+cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ISO_SRC/nexis/"            2>/dev/null || true
+cp "$SCRIPT_DIR/nexis-shell.py"                    "$ISO_SRC/nexis/"            2>/dev/null || true
+_ok "/nexis/ staged"
 
-# ── 5. GRUB config (UEFI) ────────────────────────────────────────────────────
+# ── 8. GRUB config ────────────────────────────────────────────────────────────
 
-KPARAMS="modules=loop,squashfs,sd-mod,usb-storage,virtio_pci,virtio_net,virtio_blk,e1000,e1000e,r8169,8139too,igb,vmxnet3,pcnet32,ahci,nvme nomodeset quiet alpine_dev=autodetect"
-
-for grub_cfg in \
-    "$ISO_SRC/boot/grub/grub.cfg" \
-    "$ISO_SRC/EFI/boot/grub.cfg"
-do
-    [[ -f "$grub_cfg" ]] || continue
-    cat > "$grub_cfg" << EOF
+mkdir -p "$ISO_SRC/boot/grub"
+cat > "$ISO_SRC/boot/grub/grub.cfg" << EOF
 # NeXiS Hypervisor ${VERSION}
 set default=0
 set timeout=5
@@ -136,71 +205,17 @@ set menu_color_normal=light-gray/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux  /boot/vmlinuz-lts ${KPARAMS}
-    initrd /boot/initramfs-lts
+    linux  /live/vmlinuz boot=live components nomodeset quiet
+    initrd /live/initrd.img
 }
 EOF
-    _ok "GRUB: $grub_cfg"
-done
+_ok "GRUB config written"
 
-# ── 6. Syslinux config (BIOS) ─────────────────────────────────────────────────
+# ── 9. Build ISO ──────────────────────────────────────────────────────────────
 
-for syslinux_cfg in \
-    "$ISO_SRC/syslinux/syslinux.cfg" \
-    "$ISO_SRC/boot/syslinux/syslinux.cfg"
-do
-    [[ -f "$syslinux_cfg" ]] || continue
-    cat > "$syslinux_cfg" << EOF
-DEFAULT nexis
-LABEL nexis
-    MENU LABEL Install NeXiS Hypervisor ${VERSION}
-    LINUX /boot/vmlinuz-lts
-    INITRD /boot/initramfs-lts
-    APPEND ${KPARAMS}
-TIMEOUT 50
-EOF
-    _ok "syslinux: $syslinux_cfg"
-done
-
-# ── 7. Repack ISO ─────────────────────────────────────────────────────────────
-
-_print "Repacking ISO..."
+_print "Building ISO..."
 FINAL="$OUTPUT_DIR/nexis-hypervisor-${VERSION}-amd64.iso"
-
-dd if="$ALPINE_ISO" bs=1 count=432 of="$WORK_DIR/mbr.bin" 2>/dev/null
-
-BIOS_BIN=""
-for b in \
-    "$ISO_SRC/syslinux/isolinux.bin" \
-    "$ISO_SRC/boot/syslinux/isolinux.bin" \
-    "$ISO_SRC/syslinux/syslinux.bin"
-do
-    [[ -f "$b" ]] && { BIOS_BIN="${b#$ISO_SRC/}"; break; }
-done
-
-EFI_IMG=""
-for e in "$ISO_SRC/boot/grub/efi.img" "$ISO_SRC/efi.img"; do
-    [[ -f "$e" ]] && { EFI_IMG="${e#$ISO_SRC/}"; break; }
-done
-
-if [[ -n "$BIOS_BIN" && -n "$EFI_IMG" ]]; then
-    BOOTCAT="${BIOS_BIN%/*}/boot.cat"
-    xorriso -as mkisofs \
-        -r -V "$ISO_VOLUME" -o "$FINAL" -J --joliet-long \
-        -isohybrid-mbr "$WORK_DIR/mbr.bin" -partition_offset 16 \
-        -c "$BOOTCAT" \
-        -b "$BIOS_BIN" -no-emul-boot -boot-load-size 4 -boot-info-table \
-        -eltorito-alt-boot \
-        -e "$EFI_IMG" -no-emul-boot -isohybrid-gpt-basdat \
-        "$ISO_SRC/"
-elif [[ -n "$EFI_IMG" ]]; then
-    xorriso -as mkisofs \
-        -r -V "$ISO_VOLUME" -o "$FINAL" -J --joliet-long \
-        -eltorito-alt-boot -e "$EFI_IMG" -no-emul-boot \
-        "$ISO_SRC/"
-else
-    xorriso -as mkisofs -r -V "$ISO_VOLUME" -o "$FINAL" -J "$ISO_SRC/"
-fi
+grub-mkrescue -o "$FINAL" "$ISO_SRC" -- -r -V "$ISO_VOLUME" -J --joliet-long
 
 SHA=$(sha256sum "$FINAL" | awk '{print $1}')
 echo "$SHA  nexis-hypervisor-${VERSION}-amd64.iso" > "$OUTPUT_DIR/SHA256SUMS"

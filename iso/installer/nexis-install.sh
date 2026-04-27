@@ -1,6 +1,6 @@
-#!/bin/sh
-# NeXiS Hypervisor — Interactive Installer
-# Runs in the Alpine live session. Installs Debian 12 to the target disk.
+#!/bin/bash
+# NeXiS Hypervisor — Interactive Installer (Debian 12)
+# Runs at boot in the Debian live environment.
 set -e
 
 dmesg -n 1 2>/dev/null || true
@@ -43,35 +43,13 @@ _confirm() {
     case "$ANS" in [yY]*) return 0;; *) return 1;; esac
 }
 
-# ── Bootstrap APK repos and network ──────────────────────────────────────────
-
-{
-    printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/main\n'
-    printf 'https://dl-cdn.alpinelinux.org/alpine/latest-stable/community\n'
-} > /etc/apk/repositories
-
-for _mod in virtio_net virtio_pci e1000 e1000e r8169 8139too vmxnet3 \
-            bnx2 tg3 igb ixgbe mlx5_core be2net pcnet32; do
-    modprobe "$_mod" 2>/dev/null || true
-done
-mdev -s 2>/dev/null || true
+# ── Wait for network (systemd-networkd handles DHCP automatically) ───────────
 
 _waited=0
-while [ $_waited -lt 15 ]; do
-    _nifaces=$(ip -o link show 2>/dev/null | grep -vc 'LOOPBACK')
-    [ "$_nifaces" -gt 0 ] && break
+while [ $_waited -lt 30 ]; do
+    ip route get 1.1.1.1 >/dev/null 2>&1 && break
     sleep 1; _waited=$((_waited + 1))
 done
-
-for _iface in $(ip -o link show 2>/dev/null | grep -v 'LOOPBACK' | awk -F': ' '{print $2}'); do
-    ip link set "$_iface" up 2>/dev/null || true
-    udhcpc -i "$_iface" -n -q -t 5 2>/dev/null || true
-done
-
-if ip route get 1.1.1.1 >/dev/null 2>&1; then
-    apk update -q 2>/dev/null || true
-    apk add -q kbd-bkeymaps 2>/dev/null || true
-fi
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 
@@ -101,34 +79,21 @@ printf '\n'
 _ask "  Select [1-9,0, default=1]: "
 read -r KB_NUM
 
-# KB      = loadkmap/bmap name for the live session
-# KB_XKB  = XKB layout for the installed Debian system
-# KB_VAR  = XKB variant (empty unless needed)
 case "$KB_NUM" in
-    2) KB="sg";        KB_DIR="sg"; KB_XKB="ch"; KB_VAR="" ;;
-    3) KB="sg";        KB_DIR="sg"; KB_XKB="ch"; KB_VAR="" ;;
-    4) KB="de";        KB_DIR="de"; KB_XKB="de"; KB_VAR="" ;;
-    5) KB="sf";        KB_DIR="sf"; KB_XKB="ch"; KB_VAR="fr" ;;
-    6) KB="fr";        KB_DIR="fr"; KB_XKB="fr"; KB_VAR="" ;;
-    7) KB="uk";        KB_DIR="uk"; KB_XKB="gb"; KB_VAR="" ;;
-    8) KB="es";        KB_DIR="es"; KB_XKB="es"; KB_VAR="" ;;
-    9) KB="it";        KB_DIR="it"; KB_XKB="it"; KB_VAR="" ;;
-    0) KB="pt";        KB_DIR="pt"; KB_XKB="pt"; KB_VAR="" ;;
-    *) KB="us";        KB_DIR="us"; KB_XKB="us"; KB_VAR="" ;;
+    2) KB_LOAD="sg";        KB_XKB="ch"; KB_VAR="" ;;
+    3) KB_LOAD="sg";        KB_XKB="ch"; KB_VAR="" ;;
+    4) KB_LOAD="de-latin1"; KB_XKB="de"; KB_VAR="" ;;
+    5) KB_LOAD="sf";        KB_XKB="ch"; KB_VAR="fr" ;;
+    6) KB_LOAD="fr-latin1"; KB_XKB="fr"; KB_VAR="" ;;
+    7) KB_LOAD="uk";        KB_XKB="gb"; KB_VAR="" ;;
+    8) KB_LOAD="es";        KB_XKB="es"; KB_VAR="" ;;
+    9) KB_LOAD="it";        KB_XKB="it"; KB_VAR="" ;;
+    0) KB_LOAD="pt-latin1"; KB_XKB="pt"; KB_VAR="" ;;
+    *) KB_LOAD="us";        KB_XKB="us"; KB_VAR="" ;;
 esac
 
-_kb_applied=0
-for _bmap in \
-    "/usr/share/bkeymaps/${KB_DIR}/${KB}.bmap.gz" \
-    "/usr/share/bkeymaps/${KB_DIR}/${KB}-latin1.bmap.gz" \
-    "/usr/share/bkeymaps/${KB_DIR}/${KB_DIR}.bmap.gz" \
-    "/usr/share/bkeymaps/${KB}.bmap.gz"
-do
-    [ -f "$_bmap" ] || continue
-    loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break
-done
-[ "$_kb_applied" -eq 1 ] \
-    && _ok "Keyboard: $KB — active now" \
+loadkeys "$KB_LOAD" >/dev/null 2>&1 \
+    && _ok "Keyboard: $KB_LOAD — active now" \
     || _ok "Keyboard: $KB_XKB — will apply on installed system"
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
@@ -234,24 +199,19 @@ run()  { "$@" >>"$LOG" 2>&1; }
 # ── Step 1: Network ───────────────────────────────────────────────────────────
 
 step 1 "Configuring network..."
-_ifaces=$(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}' | tr '\n' ' ')
+_ifaces=$(ip -o link show | grep -v LOOPBACK | awk -F': ' '{print $2}' | tr '\n' ' ')
 _dim "  Detected interfaces: ${_ifaces:-none}"
 
-_tries=0; _got_ip=0
-while [ $_got_ip -eq 0 ] && [ $_tries -lt 20 ]; do
-    for _iface in $(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}'); do
-        ip link set "$_iface" up 2>/dev/null || true
-        udhcpc -i "$_iface" -n -q 2>/dev/null && _got_ip=1 && break
-    done
-    [ $_got_ip -eq 1 ] && break
-    _tries=$((_tries + 1))
+_tries=0
+while [ $_tries -lt 20 ]; do
+    ip route get 1.1.1.1 >/dev/null 2>&1 && break
     printf '%b  Waiting for DHCP... (%ds)%b\r' "$DIM" "$((_tries * 3))" "$RST"
-    sleep 3
+    sleep 3; _tries=$((_tries + 1))
 done
+printf '\n'
 
-if [ $_got_ip -eq 0 ]; then
-    printf '\n'
-    _err "DHCP failed. Options:"
+if ! ip route get 1.1.1.1 >/dev/null 2>&1; then
+    _err "No network. Options:"
     printf '%b  [1]%b Retry\n' "$OR" "$RST"
     printf '%b  [2]%b Static IP\n' "$OR" "$RST"
     _ask "  Choice [1]: "; read -r _NET_CHOICE
@@ -259,24 +219,18 @@ if [ $_got_ip -eq 0 ]; then
         2)
             _ask "  IP/prefix (e.g. 192.168.1.50/24): "; read -r _CIDR
             _ask "  Gateway:                            "; read -r _GW
-            _IFACE=$(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}' | head -1)
+            _IFACE=$(ip -o link show | grep -v LOOPBACK | awk -F': ' '{print $2}' | head -1)
             ip addr add "$_CIDR" dev "$_IFACE" 2>/dev/null || true
             ip link set "$_IFACE" up 2>/dev/null || true
             ip route add default via "$_GW" 2>/dev/null || true
             printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
             ;;
-        *) for _iface in $(ip -o link show 2>/dev/null | grep -v LOOPBACK | awk -F': ' '{print $2}'); do
-               udhcpc -i "$_iface" -q 2>/dev/null || true; done ;;
+        *) systemctl restart systemd-networkd 2>/dev/null; sleep 5 ;;
     esac
 fi
 
-_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' || echo "none")
+_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || echo "none")
 _ok "Network: ${_IP}"
-
-# Install tools needed for partitioning and Debian bootstrap
-apk update >>"$LOG" 2>&1 || true
-apk add --quiet parted e2fsprogs dosfstools util-linux debootstrap >>"$LOG" 2>&1 \
-    || { _err "Cannot install tools. Log: $LOG"; sleep 5; }
 
 # ── Step 2: Partition ─────────────────────────────────────────────────────────
 
@@ -285,6 +239,8 @@ run parted -s "$DISK" mklabel gpt
 run parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
 run parted -s "$DISK" set 1 esp on
 run parted -s "$DISK" mkpart root ext4 513MiB 100%
+run partprobe "$DISK" 2>/dev/null || true
+sleep 1
 run mkfs.fat -F32 -n EFI "$EFI"
 run mkfs.ext4 -F -L nexis-root "$ROOT"
 
@@ -298,31 +254,24 @@ run mount "$EFI" /mnt/boot/efi
 
 # ── Step 4: Debootstrap ───────────────────────────────────────────────────────
 
-step 4 "Installing Debian 12 base system (downloading ~300MB)..."
-debootstrap --arch=amd64 bookworm /mnt http://deb.debian.org/debian \
-    >>"$LOG" 2>&1 \
+step 4 "Installing Debian 12 base system..."
+run debootstrap --arch=amd64 bookworm /mnt http://deb.debian.org/debian \
     || { _err "debootstrap failed. Log: $LOG"; sleep 10; exit 1; }
 
 # ── Step 5: Install packages ──────────────────────────────────────────────────
 
-step 5 "Installing packages (kernel, bootloader, services)..."
-
-# Bind-mount for chroot (works fine from Alpine live — full root access)
+step 5 "Installing kernel, bootloader, services..."
 mount -t proc   proc  /mnt/proc
 mount -t sysfs  sysfs /mnt/sys
 mount --bind    /dev  /mnt/dev
 mount --bind    /run  /mnt/run
-
-# Prevent service starts during install
-printf '#!/bin/sh\nexit 101\n' > /mnt/usr/sbin/policy-rc.d
-chmod +x /mnt/usr/sbin/policy-rc.d
 
 cat > /mnt/etc/apt/sources.list << 'EOF'
 deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
 deb http://security.debian.org/debian-security bookworm-security main
 EOF
 
-# Write keyboard config BEFORE installing keyboard-configuration (avoids prompts)
+# Write keyboard config before keyboard-configuration installs (avoids prompts)
 mkdir -p /mnt/etc/default
 cat > /mnt/etc/default/keyboard << EOF
 XKBMODEL="pc105"
@@ -331,6 +280,9 @@ XKBVARIANT="${KB_VAR}"
 XKBOPTIONS=""
 BACKSPACE="guess"
 EOF
+
+printf '#!/bin/sh\nexit 101\n' > /mnt/usr/sbin/policy-rc.d
+chmod +x /mnt/usr/sbin/policy-rc.d
 
 DEBIAN_FRONTEND=noninteractive chroot /mnt apt-get update -qq >>"$LOG" 2>&1
 
@@ -372,7 +324,7 @@ UUID=${ROOT_UUID}  /         ext4  noatime,errors=remount-ro  0  1
 UUID=${EFI_UUID}   /boot/efi vfat  umask=0077                 0  2
 EOF
 
-# systemd-networkd: DHCP on all Ethernet regardless of udev-assigned name
+# systemd-networkd DHCP on all Ethernet — works for any interface name
 mkdir -p /mnt/etc/systemd/network
 cat > /mnt/etc/systemd/network/20-dhcp.network << 'EOF'
 [Match]
@@ -381,7 +333,6 @@ Type=ether
 [Network]
 DHCP=yes
 EOF
-
 chroot /mnt systemctl enable systemd-networkd >>"$LOG" 2>&1 || true
 chroot /mnt systemctl enable systemd-resolved >>"$LOG" 2>&1 || true
 ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf 2>/dev/null || true
@@ -478,7 +429,6 @@ SVC
 chroot /mnt systemctl enable nexis-install   >>"$LOG" 2>&1 || true
 chroot /mnt systemctl enable nexis-firstboot >>"$LOG" 2>&1 || true
 
-# tty1 auto-login root → nexis-shell
 mkdir -p /mnt/etc/systemd/system/getty@tty1.service.d
 cat > /mnt/etc/systemd/system/getty@tty1.service.d/nexis.conf << 'EOF'
 [Service]
@@ -496,7 +446,6 @@ if [ "$(tty 2>/dev/null)" = "/dev/tty1" ] && [ -x /usr/local/bin/nexis-shell ]; 
 fi
 PROFILE
 
-# Unmount in reverse order
 umount /mnt/run      2>/dev/null || true
 umount /mnt/dev      2>/dev/null || true
 umount /mnt/sys      2>/dev/null || true
