@@ -100,9 +100,31 @@ case "$KB_NUM" in
     *) KB="us";    KB_VARIANT="us" ;;
 esac
 
-# Apply keyboard NOW so password entry uses the correct layout
-setup-keymap "$KB" "$KB_VARIANT" >/dev/null 2>&1 || true
-_ok "Keyboard: $KB ($KB_VARIANT) — active now"
+# Apply keyboard NOW so password entry is correct.
+# setup-keymap hangs (tries to restart OpenRC service) — use loadkmap instead.
+# loadkmap is a BusyBox built-in that loads a binary keymap directly.
+_kb_applied=0
+for _bmap in \
+    "/usr/share/bkeymaps/${KB_VARIANT}/${KB}-${KB_VARIANT}.bmap" \
+    "/usr/share/bkeymaps/${KB_VARIANT}/${KB}.bmap" \
+    "/usr/share/bkeymaps/${KB_VARIANT}/${KB_VARIANT}.bmap" \
+    "/usr/share/bkeymaps/de/${KB}.bmap" \
+    "/usr/share/bkeymaps/${KB}.bmap"
+do
+    if [ -f "$_bmap" ]; then
+        loadkmap < "$_bmap" 2>/dev/null && _kb_applied=1 && break
+    fi
+done
+if [ "$_kb_applied" -eq 0 ]; then
+    # Fallback: try loadkeys (kbd package) with a 2s timeout
+    timeout 2 loadkeys "$KB" >/dev/null 2>&1 && _kb_applied=1 || true
+fi
+if [ "$_kb_applied" -eq 1 ]; then
+    _ok "Keyboard: $KB ($KB_VARIANT) — active now"
+else
+    _ok "Keyboard: $KB ($KB_VARIANT) — will apply on installed system"
+    _dim "  (Live session stays US — type passwords consistently)"
+fi
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
 _header
