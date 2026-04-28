@@ -30,14 +30,15 @@ def init():
         );
 
         CREATE TABLE IF NOT EXISTS nexis_pairing (
-            id               INTEGER PRIMARY KEY CHECK (id = 1),
-            controller_url   TEXT NOT NULL,
-            controller_token TEXT NOT NULL,
-            controller_name  TEXT,
-            sso_enabled      INTEGER NOT NULL DEFAULT 1,
-            paired_at        TEXT NOT NULL,
-            last_ping        TEXT,
-            last_sync        TEXT
+            id                   INTEGER PRIMARY KEY CHECK (id = 1),
+            controller_url       TEXT NOT NULL,
+            controller_token     TEXT NOT NULL,
+            controller_api_token TEXT NOT NULL DEFAULT '',
+            controller_name      TEXT,
+            sso_enabled          INTEGER NOT NULL DEFAULT 1,
+            paired_at            TEXT NOT NULL,
+            last_ping            TEXT,
+            last_sync            TEXT
         );
 
         CREATE TABLE IF NOT EXISTS cluster_nodes (

@@ -65,8 +65,11 @@ def _ctrl_login(controller_url: str, username: str, password: str) -> str:
         raise HTTPException(502, f'Cannot reach controller at {controller_url}: {e}')
 
 
-def _ctrl_register(controller_url: str, ctrl_token: str) -> None:
-    """Register this hypervisor node with the Controller (best-effort)."""
+def _ctrl_register(controller_url: str, ctrl_token: str) -> str | None:
+    """
+    Register this hypervisor node with the Controller (best-effort).
+    Returns the api_token the Controller generated for calling back to us, or None.
+    """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -84,10 +87,12 @@ def _ctrl_register(controller_url: str, ctrl_token: str) -> None:
             method='POST',
         )
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=5):
-                break
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = json.loads(resp.read())
+                return data.get('api_token')
         except Exception:
             continue
+    return None
 
 
 def _sso_validate(username: str, password: str) -> str | None:
@@ -157,16 +162,16 @@ def setup(req: SetupRequest):
     # Authenticate against Controller — raises 401/502 on failure
     ctrl_token = _ctrl_login(url, req.username, req.password)
 
-    # Register this node (non-fatal)
-    _ctrl_register(url, ctrl_token)
+    # Register this node (non-fatal); get the api_token the Controller will use
+    controller_api_token = _ctrl_register(url, ctrl_token) or ''
 
     # Persist pairing
     now = datetime.now(timezone.utc).isoformat()
     db.conn().execute(
         '''INSERT OR REPLACE INTO nexis_pairing
-           (id, controller_url, controller_token, sso_enabled, paired_at)
-           VALUES (1, ?, ?, 1, ?)''',
-        (url, ctrl_token, now),
+           (id, controller_url, controller_token, controller_api_token, sso_enabled, paired_at)
+           VALUES (1, ?, ?, ?, 1, ?)''',
+        (url, ctrl_token, controller_api_token, now),
     )
     db.conn().commit()
 
