@@ -65,10 +65,15 @@ _ok "Python environment ready"
 
 # ── 5. Web interface ──────────────────────────────────────────────────────────
 _print "Building web interface..."
-if ! command -v node &>/dev/null; then
-    _print "Node.js not found — installing via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>/dev/null
-    apt-get install -yq nodejs 2>/dev/null
+if ! command -v npm &>/dev/null; then
+    _print "npm not found — installing Node.js 22 via NodeSource..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -yq nodejs
+    # Ensure npm is in PATH for this session
+    export PATH="/usr/bin:/usr/local/bin:$PATH"
+fi
+if ! command -v npm &>/dev/null; then
+    _err "npm still not found after Node.js install. Check NodeSource output above."
 fi
 ( cd "$INSTALL_DIR/web" && npm ci --silent && npm run build --silent )
 _ok "Web interface built"
