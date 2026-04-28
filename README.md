@@ -80,25 +80,25 @@ The installer handles: packages, libvirt, QEMU, LXC, Python venv, web UI build, 
 
 1. Open `https://<host-ip>:8443`
 2. Accept the self-signed certificate
-3. Complete the setup wizard (set credentials, optionally link Controller)
-4. Default: `creator` / `Asdf1234!` — change on first login
+3. Complete the setup wizard — enter your NeXiS Controller URL, username, and password
+4. The node registers itself with the Controller and SSO is activated
+
+> **Emergency access**: if the Controller is unreachable, `creator` / `Asdf1234!` provides local fallback.
 
 ---
 
 ## Cluster Setup
 
-1. Install the hypervisor on each node
-2. On the primary node go to **Cluster → Add Node**
-3. Enter the remote node's URL and its API token
-4. All nodes' VMs appear in the unified **Virtual Instances** view
+All nodes managed via a single NeXiS Controller. The Controller aggregates VMs across every paired hypervisor node. There is no manual per-node cluster join — pairing a node with the Controller is sufficient.
 
 ---
 
-## Pairing with the Controller
+## Connecting to the Controller
 
-1. In the Controller web UI, go to **Nodes → Add Hypervisor**
-2. Enter this node's URL and API token (found in this node's **System** page)
-3. The node appears in the Controller — Workers can manage VMs via Controller SSO
+1. Run the setup wizard on first open — enter Controller URL + credentials
+2. The node authenticates against the Controller and registers itself
+3. All subsequent logins use Controller SSO
+4. Workers see VMs from all paired nodes via the Controller's `/api/hyp/*` proxy
 
 ---
 
@@ -108,7 +108,8 @@ All endpoints require `Authorization: Bearer <token>`.
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /api/auth/login` | Authenticate (public) |
+| `POST /api/auth/setup` | Connect node to Controller (first-run, public) |
+| `POST /api/auth/login` | Authenticate via Controller SSO or local fallback |
 | `GET /api/vms` | List local VMs |
 | `POST /api/vms` | Create VM |
 | `POST /api/vms/{id}/start\|stop\|reboot` | Power operations |
@@ -139,7 +140,7 @@ All endpoints require `Authorization: Bearer <token>`.
 | Daemon | Python 3.11 · FastAPI · uvicorn |
 | Virtualisation | libvirt · QEMU/KVM · LXC |
 | Console | noVNC (WebSocket VNC proxy) |
-| Auth | Bearer token · SHA-256 · SQLite |
+| Auth | Controller SSO · Bearer token · local emergency fallback |
 | Realtime | Server-Sent Events |
 | Web UI | React 18 · TypeScript · Vite · Tailwind CSS |
 | Service | systemd `nexis-hypervisor-daemon.service` |

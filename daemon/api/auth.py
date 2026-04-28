@@ -1,12 +1,13 @@
 """
 NeXiS Hypervisor — Authentication
-SSO flow: validate credentials against the paired NeXiS Controller.
-Fallback: validate against the local users table when no controller is paired.
+All authentication is delegated to the paired NeXiS Controller via SSO.
+Local fallback user (creator / Asdf1234!) provides emergency access only.
 """
-import secrets
 import hashlib
-import ssl
 import json
+import secrets
+import socket
+import ssl
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -20,18 +21,92 @@ import db
 router = APIRouter()
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _hash(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
 
-def _create_token(username: str) -> str:
+def _create_session(username: str) -> str:
     token = secrets.token_hex(32)
     db.conn().execute(
-        'INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)',
+        'INSERT INTO sessions (token, username, created_at) VALUES (?,?,?)',
         (token, username, datetime.now(timezone.utc).isoformat()),
     )
     db.conn().commit()
     return token
+
+
+def _ctrl_login(controller_url: str, username: str, password: str) -> str:
+    """Authenticate against the Controller; returns the Controller-issued token."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    payload = json.dumps({'username': username, 'password': password}).encode()
+    req = urllib.request.Request(
+        f'{controller_url}/api/auth/login',
+        data=payload,
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
+            data = json.loads(resp.read())
+            token = data.get('token') or data.get('access_token')
+            if not token:
+                raise HTTPException(401, 'Controller did not return a token.')
+            return token
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise HTTPException(401, f'Controller rejected credentials: {body[:120]}')
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f'Cannot reach controller at {controller_url}: {e}')
+
+
+def _ctrl_register(controller_url: str, ctrl_token: str) -> None:
+    """Register this hypervisor node with the Controller (best-effort)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    hostname = config.get('hostname', socket.gethostname())
+    payload = json.dumps({
+        'name': f'NeXiS Hypervisor ({hostname})',
+        'url': f'https://{hostname}:{config.PORT}',
+        'type': 'hypervisor',
+    }).encode()
+    for path in ['/api/hyp/nodes/register', '/api/devices/register']:
+        req = urllib.request.Request(
+            f'{controller_url}{path}',
+            data=payload,
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {ctrl_token}'},
+            method='POST',
+        )
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=5):
+                break
+        except Exception:
+            continue
+
+
+def _sso_validate(username: str, password: str) -> str | None:
+    """
+    Validate credentials against the paired Controller.
+    Returns a local session token on success, None if controller is unreachable.
+    """
+    row = db.conn().execute(
+        'SELECT controller_url, sso_enabled FROM nexis_pairing WHERE id=1'
+    ).fetchone()
+    if not row or not row['sso_enabled']:
+        return None
+    try:
+        _ctrl_login(row['controller_url'], username, password)
+        return _create_session(username)
+    except HTTPException:
+        raise
+    except Exception:
+        return None
 
 
 def _local_check(username: str, password: str) -> bool:
@@ -43,36 +118,7 @@ def _local_check(username: str, password: str) -> bool:
     return secrets.compare_digest(_hash(password), row['hash'])
 
 
-def _sso_validate(username: str, password: str) -> dict | None:
-    """
-    Ask the paired NeXiS Controller to validate credentials.
-    Returns {'username', 'role', 'token'} on success, None on failure/unreachable.
-    """
-    row = db.conn().execute(
-        'SELECT controller_url, sso_enabled FROM nexis_pairing WHERE id=1'
-    ).fetchone()
-    if not row or not row['sso_enabled']:
-        return None
-
-    url = row['controller_url'].rstrip('/') + '/api/sso/validate'
-    payload = json.dumps({'username': username, 'password': password}).encode()
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    try:
-        req = urllib.request.Request(
-            url, data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
-        )
-        with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
-            data = json.loads(resp.read())
-            if data.get('valid'):
-                return data
-    except Exception:
-        pass
-    return None
-
+# ── Models ────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     username: str
@@ -80,49 +126,55 @@ class LoginRequest(BaseModel):
 
 
 class SetupRequest(BaseModel):
+    controller_url: str
     username: str
     password: str
-    controller_url: str = ''
 
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get('/status')
 def status():
     setup_done = bool(config.get('setup_complete'))
-    paired = bool(db.conn().execute(
-        'SELECT 1 FROM nexis_pairing WHERE id=1'
-    ).fetchone())
+    paired = bool(db.conn().execute('SELECT 1 FROM nexis_pairing WHERE id=1').fetchone())
     return {'setup_done': setup_done, 'sso_paired': paired}
 
 
 @router.post('/setup')
 def setup(req: SetupRequest):
     """
-    Called by the setup wizard to link this node to a NeXiS Controller.
-    Validates the credentials against the controller and stores the pairing.
+    Connect this node to a NeXiS Controller.
+    Validates credentials against the Controller, stores the pairing, and
+    returns a session token. Called once by the setup wizard.
     """
     if config.get('setup_complete'):
         raise HTTPException(400, 'Node already configured.')
-    if len(req.password) < 8:
-        raise HTTPException(400, 'Password must be at least 8 characters.')
 
-    # If controller URL provided in request, save it before checking
-    if req.controller_url:
-        config.set_val('pending_controller_url', req.controller_url.rstrip('/'))
+    url = req.controller_url.strip().rstrip('/')
+    if not url:
+        raise HTTPException(400, 'Controller URL is required.')
 
-    # Try SSO first if a controller URL was stored during wizard step
-    controller_url = config.get('pending_controller_url', '')
-    if controller_url:
-        result = _sso_validate(req.username, req.password)
-        if not result:
-            raise HTTPException(401, 'Could not authenticate against the NeXiS Controller.')
-    else:
-        # No controller — set up local user
-        if not _local_check(req.username, req.password):
-            raise HTTPException(401, 'Invalid credentials.')
+    # Authenticate against Controller — raises 401/502 on failure
+    ctrl_token = _ctrl_login(url, req.username, req.password)
+
+    # Register this node (non-fatal)
+    _ctrl_register(url, ctrl_token)
+
+    # Persist pairing
+    now = datetime.now(timezone.utc).isoformat()
+    db.conn().execute(
+        '''INSERT OR REPLACE INTO nexis_pairing
+           (id, controller_url, controller_token, sso_enabled, paired_at)
+           VALUES (1, ?, ?, 1, ?)''',
+        (url, ctrl_token, now),
+    )
+    db.conn().commit()
 
     config.set_val('setup_complete', True)
-    token = _create_token(req.username)
-    db.log_action('setup', f'Node configured by {req.username}')
+    config.set_val('controller_url', url)
+
+    token = _create_session(req.username)
+    db.log_action('setup', f'Node connected to {url} by {req.username}')
     return {'token': token, 'username': req.username}
 
 
@@ -138,20 +190,24 @@ def login(req: LoginRequest):
     if not username:
         raise HTTPException(400, 'Username required.')
 
-    # 1. Try SSO via paired controller
-    sso = _sso_validate(username, req.password)
-    if sso:
-        token = _create_token(username)
-        db.log_action('login', f'{username} via SSO')
-        return {'token': token, 'username': username, 'role': sso.get('role', 'user')}
+    # 1. Try Controller SSO
+    paired = db.conn().execute('SELECT controller_url FROM nexis_pairing WHERE id=1').fetchone()
+    if paired:
+        try:
+            _ctrl_login(paired['controller_url'], username, req.password)
+            token = _create_session(username)
+            db.log_action('login', f'{username} via Controller SSO')
+            return {'token': token, 'username': username}
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise HTTPException(401, 'Invalid username or password.')
+            # Controller unreachable — fall through to local
 
-    # 2. Fall back to local user table
+    # 2. Local fallback (emergency access only)
     if _local_check(username, req.password):
-        row = db.conn().execute(
-            'SELECT role FROM local_users WHERE username=?', (username,)
-        ).fetchone()
-        token = _create_token(username)
-        db.log_action('login', f'{username} via local auth')
+        row = db.conn().execute('SELECT role FROM local_users WHERE username=?', (username,)).fetchone()
+        token = _create_session(username)
+        db.log_action('login', f'{username} via local fallback')
         return {'token': token, 'username': username, 'role': row['role'] if row else 'user'}
 
     raise HTTPException(401, 'Invalid username or password.')

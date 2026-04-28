@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+    branches:
+      - 'release/[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
@@ -39,7 +41,15 @@ jobs:
 
       - name: Get version
         id: ver
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          else
+            V=$(cat VERSION | tr -d 'v \n')
+            echo "VERSION=${V}" >> $GITHUB_OUTPUT
+            echo "TAG=v${V}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Assemble .deb package tree
         run: |
@@ -70,10 +80,11 @@ jobs:
           dpkg-deb --build --root-owner-group pkg \
             nexis-hypervisor_${V}_amd64.deb
 
-      - name: Create release
+      - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
-          name: "NeXiS Hypervisor ${{ github.ref_name }}"
+          tag_name: ${{ steps.ver.outputs.TAG }}
+          name: "NeXiS Hypervisor v${{ steps.ver.outputs.VERSION }}"
           body: |
             ## Installation
 
@@ -84,11 +95,11 @@ jobs:
 
             **Update via .deb (if already installed):**
             ```bash
-            wget https://github.com/santiagotoro2023/nexis-hypervisor/releases/download/${{ github.ref_name }}/nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
+            wget https://github.com/santiagotoro2023/nexis-hypervisor/releases/download/v${{ steps.ver.outputs.VERSION }}/nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
             sudo dpkg -i nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
             ```
 
-            After installation, open `https://<host-ip>:8443` and complete the setup wizard.
+            After installation, open `https://<host-ip>:8443` and connect the node to your NeXiS Controller.
 
             ---
             Part of the [NeXiS ecosystem](https://github.com/santiagotoro2023).
