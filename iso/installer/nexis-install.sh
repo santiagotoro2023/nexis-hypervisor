@@ -92,9 +92,18 @@ case "$KB_NUM" in
     *) KB_LOAD="us";        KB_XKB="us"; KB_VAR="" ;;
 esac
 
-loadkeys "$KB_LOAD" >/dev/null 2>&1 \
-    && _ok "Keyboard: $KB_LOAD — active now" \
-    || _ok "Keyboard: $KB_XKB — will apply on installed system"
+if loadkeys "$KB_LOAD" >>"$LOG" 2>&1; then
+    _ok "Keyboard: $KB_LOAD active"
+else
+    # Direct name failed — search for the .kmap.gz file
+    _kmap=$(find /usr/share/keymaps -name "${KB_LOAD}.kmap.gz" \
+                 -o -name "${KB_LOAD}-latin1.kmap.gz" 2>/dev/null | head -1)
+    if [ -n "$_kmap" ] && loadkeys "$_kmap" >>"$LOG" 2>&1; then
+        _ok "Keyboard: $(basename "$_kmap" .kmap.gz) active"
+    else
+        _err "loadkeys $KB_LOAD failed — keyboard stays US for now, will apply after install"
+    fi
+fi
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
 
@@ -196,6 +205,31 @@ printf '\n'
 step() { printf '%b  [%s/8]%b  %s\n' "$OR" "$1" "$RST" "$2"; }
 run()  { "$@" >>"$LOG" 2>&1; }
 
+_run_progress() {
+    # _run_progress "label" estimated_lines cmd [args...]
+    local label="$1" est="$2"; shift 2
+    local tmp="/tmp/nxp$$.log" w=28 n=0 pct=0 f=0 info=""
+    "$@" >"$tmp" 2>&1 &
+    local pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        n=$(wc -l <"$tmp" 2>/dev/null || echo 0)
+        pct=$(( n * 100 / est )); [ "$pct" -gt 99 ] && pct=99
+        f=$(( pct * w / 100 ))
+        info=$(tail -1 "$tmp" 2>/dev/null | sed 's/^I: //' | cut -c1-36 || true)
+        printf '\r%b  [%s%s] %3d%%%b  %-36s' \
+            "$OR" \
+            "$(printf '%*s' "$f" '' | tr ' ' '#')" \
+            "$(printf '%*s' "$((w-f))" '' | tr ' ' '-')" \
+            "$pct" "$RST" "$info"
+        sleep 0.5
+    done
+    wait "$pid"; local rc=$?
+    cat "$tmp" >>"$LOG"; rm -f "$tmp"
+    printf '\r%b  [%s] 100%%%b  %-36s\n' \
+        "$OR" "$(printf '%*s' "$w" '' | tr ' ' '#')" "$RST" "$label"
+    return "$rc"
+}
+
 # ── Step 1: Network ───────────────────────────────────────────────────────────
 
 step 1 "Configuring network..."
@@ -255,8 +289,10 @@ run mount "$EFI" /mnt/boot/efi
 # ── Step 4: Debootstrap ───────────────────────────────────────────────────────
 
 step 4 "Installing Debian 12 base system..."
-run debootstrap --arch=amd64 bookworm /mnt http://deb.debian.org/debian \
-    || { _err "debootstrap failed. Log: $LOG"; sleep 10; exit 1; }
+_run_progress "debootstrap bookworm (~2-4 min)" 220 \
+    debootstrap --arch=amd64 bookworm /mnt http://deb.debian.org/debian \
+    || { _err "debootstrap failed — see $LOG"; sleep 10; exit 1; }
+_ok "Base system installed"
 
 # ── Step 5: Install packages ──────────────────────────────────────────────────
 
@@ -286,21 +322,23 @@ chmod +x /mnt/usr/sbin/policy-rc.d
 
 DEBIAN_FRONTEND=noninteractive chroot /mnt apt-get update -qq >>"$LOG" 2>&1
 
-DEBIAN_FRONTEND=noninteractive chroot /mnt apt-get install -y --no-install-recommends \
-    linux-image-amd64 \
-    grub-efi-amd64 \
-    efibootmgr \
-    openssh-server \
-    chrony \
-    python3 python3-pip \
-    curl git sudo \
-    iproute2 \
-    e2fsprogs dosfstools \
-    kbd console-setup keyboard-configuration \
-    kmod \
-    ca-certificates \
-    >>"$LOG" 2>&1 \
-    || { _err "Package install failed. Log: $LOG"; sleep 10; exit 1; }
+_run_progress "Installing kernel + packages (~3-6 min)" 200 \
+    env DEBIAN_FRONTEND=noninteractive \
+    chroot /mnt apt-get install -y --no-install-recommends \
+        linux-image-amd64 \
+        grub-efi-amd64 \
+        efibootmgr \
+        openssh-server \
+        chrony \
+        python3 python3-pip \
+        curl git sudo \
+        iproute2 \
+        e2fsprogs dosfstools \
+        kbd console-setup keyboard-configuration \
+        kmod \
+        ca-certificates \
+    || { _err "Package install failed — see $LOG"; sleep 10; exit 1; }
+_ok "Packages installed"
 
 rm -f /mnt/usr/sbin/policy-rc.d
 
