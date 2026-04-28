@@ -3,7 +3,7 @@
 # Run as root: curl -sSL <url>/install.sh | sudo bash
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="2.4.5"
 INSTALL_DIR="/opt/nexis-hypervisor"
 DATA_DIR="/etc/nexis-hypervisor"
 REPO="https://github.com/santiagotoro2023/nexis-hypervisor"
