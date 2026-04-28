@@ -37,6 +37,9 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install system build deps
+        run: sudo apt-get install -y libvirt-dev libxml2-dev pkg-config
+
       - name: Build Python venv
         run: |
           python -m venv venv
