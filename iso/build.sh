@@ -214,8 +214,15 @@ cat > "$ISO_SRC/boot/grub/grub.cfg" << EOF
 # Force VGA text console — prevents "no suitable video mode" on VMware/UEFI
 terminal_input  console
 terminal_output console
+# Keep display in text mode during kernel handoff (avoids second video-mode error)
+set gfxpayload=text
 set default=0
 set timeout=5
+# VGA palette: brown = dark orange, yellow = bright orange-ish
+set color_normal=light-gray/black
+set color_highlight=yellow/black
+set menu_color_normal=brown/black
+set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
     linux  /live/vmlinuz boot=live components nomodeset quiet
