@@ -154,7 +154,7 @@ def create_vm(name: str, vcpus: int, memory_mb: int, disk_gb: int,
   <name>{name}</name>
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{vcpus}</vcpu>
-  <os><type arch='x86_64' machine='pc-i440fx-2.9'>hvm</type><boot dev='cdrom'/><boot dev='hd'/></os>
+  <os><type arch='x86_64' machine='q35'>hvm</type><boot dev='cdrom'/><boot dev='hd'/></os>
   <features><acpi/><apic/></features>
   <cpu mode='host-model'/>
   <devices>

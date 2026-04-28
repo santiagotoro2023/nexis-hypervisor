@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Trash2, HardDrive, FolderOpen, Download, Plus, X, Globe, CheckCircle, AlertCircle } from 'lucide-react'
+import { Upload, Trash2, HardDrive, FolderOpen, Download, Plus, X, Globe, CheckCircle, AlertCircle, ChevronRight, Folder, File, ArrowLeft } from 'lucide-react'
 import { AppLayout } from '../layout/AppLayout'
 import { NxSpinner } from '../common/NxSpinner'
 import { NxGauge } from '../common/NxGauge'
@@ -24,6 +24,19 @@ interface ISOFile {
   path: string
 }
 
+interface BrowseEntry {
+  name: string
+  type: 'file' | 'directory'
+  size_bytes: number
+  modified: string
+}
+
+interface BrowseResult {
+  path: string
+  parent: string | null
+  entries: BrowseEntry[]
+}
+
 interface CatalogItem {
   id: string
   name: string
@@ -46,6 +59,8 @@ export function Storage() {
   const [uploading, setUploading] = useState(false)
   const [showAddPool, setShowAddPool] = useState(false)
   const [showCatalog, setShowCatalog] = useState(false)
+  const [showBrowser, setShowBrowser] = useState(false)
+  const [browsePath, setBrowsePath] = useState<string | null>(null)
   const [downloading, setDownloading] = useState<Record<string, DownloadState>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -159,6 +174,13 @@ export function Storage() {
                         <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-wider ${pool.active ? 'bg-nx-green/10 text-nx-green' : 'bg-nx-red/10 text-nx-red'}`}>
                           {pool.type}
                         </span>
+                        <button
+                          className="text-nx-fg2 hover:text-nx-orange transition-colors"
+                          title="Browse"
+                          onClick={() => { setBrowsePath(pool.path); setShowBrowser(true) }}
+                        >
+                          <FolderOpen size={12} />
+                        </button>
                         {!pool.builtin && (
                           <button className="text-nx-fg2 hover:text-nx-red transition-colors" onClick={() => removePool(pool.id)}>
                             <X size={12} />
@@ -250,6 +272,11 @@ export function Storage() {
         <AddPoolModal onClose={() => setShowAddPool(false)} onAdded={() => { setShowAddPool(false); fetch() }} />
       )}
 
+      {/* Storage Browser Modal */}
+      {showBrowser && browsePath && (
+        <StorageBrowser path={browsePath} onClose={() => setShowBrowser(false)} />
+      )}
+
       {/* ISO Catalog Modal */}
       {showCatalog && (
         <NxModal title="ISO Catalog" onClose={() => setShowCatalog(false)} width="max-w-3xl">
@@ -312,6 +339,118 @@ export function Storage() {
     </AppLayout>
   )
 }
+
+// ── Storage Browser ───────────────────────────────────────────────────────────
+
+function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }) {
+  const [browse, setBrowse] = useState<BrowseResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function navigate(p: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.get<BrowseResult>(`/storage/browse?path=${encodeURIComponent(p)}`)
+      setBrowse(data)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { navigate(path) }, [path])
+
+  function formatSize(bytes: number) {
+    if (bytes === 0) return '—'
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+
+  const pathParts = (browse?.path ?? path).split('/').filter(Boolean)
+
+  return (
+    <NxModal title="Storage Browser" onClose={onClose} width="max-w-3xl">
+      <div className="space-y-3">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-1 text-xs font-mono flex-wrap">
+          <span className="text-nx-fg2">/</span>
+          {pathParts.map((part, i) => {
+            const p = '/' + pathParts.slice(0, i + 1).join('/')
+            return (
+              <span key={p} className="flex items-center gap-1">
+                <button className="text-nx-orange hover:underline" onClick={() => navigate(p)}>{part}</button>
+                {i < pathParts.length - 1 && <ChevronRight size={10} className="text-nx-fg2" />}
+              </span>
+            )
+          })}
+        </div>
+
+        {/* Back button */}
+        {browse?.parent && (
+          <button
+            className="flex items-center gap-1.5 text-xs text-nx-fg2 hover:text-nx-fg transition-colors"
+            onClick={() => navigate(browse.parent!)}
+          >
+            <ArrowLeft size={12} /> Parent directory
+          </button>
+        )}
+
+        {loading && <div className="flex items-center justify-center py-10"><NxSpinner size={24} /></div>}
+        {error && <div className="text-nx-red text-xs">{error}</div>}
+
+        {!loading && browse && (
+          <div className="nx-card overflow-hidden">
+            {browse.entries.length === 0 ? (
+              <div className="py-8 text-center text-nx-fg2 text-xs">Empty directory</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-nx-border text-[10px] text-nx-fg2 uppercase tracking-wider">
+                    <th className="text-left px-5 py-3">Name</th>
+                    <th className="text-left px-4 py-3">Size</th>
+                    <th className="text-left px-4 py-3">Modified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {browse.entries.map(entry => (
+                    <tr key={entry.name} className="border-b border-nx-border/50 hover:bg-nx-dim/30 transition-colors">
+                      <td className="px-5 py-2.5">
+                        {entry.type === 'directory' ? (
+                          <button
+                            className="flex items-center gap-2 text-xs text-nx-orange hover:underline font-mono"
+                            onClick={() => navigate(`${browse.path}/${entry.name}`)}
+                          >
+                            <Folder size={12} />
+                            {entry.name}/
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-2 text-xs text-nx-fg font-mono">
+                            <File size={12} className="text-nx-fg2" />
+                            {entry.name}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-nx-fg2">
+                        {entry.type === 'directory' ? '—' : formatSize(entry.size_bytes)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-nx-fg2">
+                        {new Date(entry.modified).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+    </NxModal>
+  )
+}
+
 
 // ── Add Pool Modal ────────────────────────────────────────────────────────────
 

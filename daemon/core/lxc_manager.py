@@ -97,9 +97,21 @@ def list_templates() -> list[str]:
     return sorted(templates) or ['debian', 'ubuntu', 'alpine']
 
 
+_TEMPLATE_MAP = {
+    'debian': ('debian', 'bookworm'),
+    'debian-12': ('debian', 'bookworm'),
+    'ubuntu': ('ubuntu', 'jammy'),
+    'ubuntu-22.04': ('ubuntu', 'jammy'),
+    'ubuntu-24.04': ('ubuntu', 'noble'),
+    'alpine': ('alpine', '3.20'),
+    'alpine-3.20': ('alpine', '3.20'),
+}
+
+
 def create_container(name: str, template: str, vcpus: int,
                      memory_mb: int, disk_gb: int, password: str):
-    _run('lxc-create', '-n', name, '-t', template)
+    distro, release = _TEMPLATE_MAP.get(template.lower(), ('debian', 'bookworm'))
+    _run('lxc-create', '-n', name, '-t', 'download', '--', '-d', distro, '-r', release, '-a', 'amd64')
 
     config_path = f'/var/lib/lxc/{name}/config'
     with open(config_path, 'a') as f:

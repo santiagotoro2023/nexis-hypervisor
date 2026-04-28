@@ -32,7 +32,9 @@ export function Sidebar() {
       <div className="flex items-center gap-2.5 px-5 py-5 border-b border-nx-border">
         <div className="w-7 h-7 flex items-center justify-center">
           <svg viewBox="0 0 28 28" fill="none" className="w-7 h-7">
-            <path d="M4 4h6l4 8 4-8h6L14 24 4 4z" fill="#F87200"/>
+            <path d="M14 3 L26 23 L2 23 Z" stroke="#F87200" strokeWidth="1.5" strokeLinejoin="round"/>
+            <ellipse cx="14" cy="17" rx="4.5" ry="2.8" stroke="#F87200" strokeWidth="1" fill="none"/>
+            <circle cx="14" cy="17" r="1.4" fill="#F87200"/>
           </svg>
         </div>
         <div>

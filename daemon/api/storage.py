@@ -23,17 +23,16 @@ ISO_DIR = config.ISO_DIR
 # ── ISO Catalog ───────────────────────────────────────────────────────────────
 
 ISO_CATALOG = [
-    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04',   'category': 'Linux',   'size_gb': 2.7,  'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso',                          'filename': 'ubuntu-24.04.1-live-server-amd64.iso'},
-    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04',   'category': 'Linux',   'size_gb': 1.8,  'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.4-live-server-amd64.iso',                          'filename': 'ubuntu-22.04.4-live-server-amd64.iso'},
-    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12',       'category': 'Linux',   'size_gb': 0.6,  'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',       'filename': 'debian-12.10.0-amd64-netinst.iso'},
-    {'id': 'alpine-3.20',          'name': 'Alpine Linux 3.20',       'version': '3.20',     'category': 'Linux',   'size_gb': 0.2,  'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-standard-3.20.0-x86_64.iso',    'filename': 'alpine-standard-3.20.0-x86_64.iso'},
-    {'id': 'fedora-40-server',     'name': 'Fedora Server 40',        'version': '40',       'category': 'Linux',   'size_gb': 2.2,  'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/40/Server/x86_64/iso/Fedora-Server-netinstall-x86_64-40-1.14.iso', 'filename': 'Fedora-Server-netinstall-x86_64-40-1.14.iso'},
-    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9',        'category': 'Linux',   'size_gb': 1.5,  'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.4-x86_64-minimal.iso',             'filename': 'Rocky-9.4-x86_64-minimal.iso'},
-    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling',  'category': 'Linux',   'size_gb': 1.0,  'url': 'https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso',                                   'filename': 'archlinux-x86_64.iso'},
-    {'id': 'freebsd-14',           'name': 'FreeBSD 14.0',            'version': '14.0',     'category': 'BSD',     'size_gb': 1.1,  'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.0/FreeBSD-14.0-RELEASE-amd64-disc1.iso', 'filename': 'FreeBSD-14.0-RELEASE-amd64-disc1.iso'},
-    {'id': 'opnsense-24',          'name': 'OPNsense 24',             'version': '24',       'category': 'Network', 'size_gb': 0.6,  'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/24.7/OPNsense-24.7-dvd-amd64.iso.bz2',       'filename': 'OPNsense-24.7-dvd-amd64.iso'},
-    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',    'category': 'Storage', 'size_gb': 2.5,  'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',       'filename': 'TrueNAS-SCALE-24.10.2.iso'},
-    {'id': 'windows-server-2022',  'name': 'Windows Server 2022',     'version': '2022',     'category': 'Windows', 'size_gb': 5.4,  'url': '',  'filename': '',  'note': 'Requires Microsoft Volume Licensing. Download from Microsoft Evaluation Center.'},
+    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04',   'category': 'Linux',   'size_gb': 2.7,  'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso',                               'filename': 'ubuntu-24.04.2-live-server-amd64.iso'},
+    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04',   'category': 'Linux',   'size_gb': 1.8,  'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso',                               'filename': 'ubuntu-22.04.5-live-server-amd64.iso'},
+    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12',       'category': 'Linux',   'size_gb': 0.6,  'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',            'filename': 'debian-12.10.0-amd64-netinst.iso'},
+    {'id': 'alpine-3.21',          'name': 'Alpine Linux 3.21',       'version': '3.21',     'category': 'Linux',   'size_gb': 0.2,  'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.0-x86_64.iso',         'filename': 'alpine-standard-3.21.0-x86_64.iso'},
+    {'id': 'fedora-41-server',     'name': 'Fedora Server 41',        'version': '41',       'category': 'Linux',   'size_gb': 2.2,  'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/41/Server/x86_64/iso/Fedora-Server-netinstall-x86_64-41-1.4.iso', 'filename': 'Fedora-Server-netinstall-x86_64-41-1.4.iso'},
+    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9.5',      'category': 'Linux',   'size_gb': 1.5,  'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso',                  'filename': 'Rocky-9.5-x86_64-minimal.iso'},
+    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling',  'category': 'Linux',   'size_gb': 1.1,  'url': 'https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso',                                      'filename': 'archlinux-x86_64.iso'},
+    {'id': 'freebsd-14.2',         'name': 'FreeBSD 14.2',            'version': '14.2',     'category': 'BSD',     'size_gb': 1.1,  'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-amd64-disc1.iso', 'filename': 'FreeBSD-14.2-RELEASE-amd64-disc1.iso'},
+    {'id': 'opnsense-25',          'name': 'OPNsense 25.1',           'version': '25.1',     'category': 'Network', 'size_gb': 1.0,  'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.1/OPNsense-25.1-dvd-amd64.iso.bz2',            'filename': 'OPNsense-25.1-dvd-amd64.iso.bz2'},
+    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',    'category': 'Storage', 'size_gb': 2.5,  'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',           'filename': 'TrueNAS-SCALE-24.10.2.iso'},
 ]
 
 
@@ -274,6 +273,42 @@ async def fetch_iso(req: FetchRequest):
 
     return StreamingResponse(_stream(), media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@router.get('/browse')
+def browse_storage(path: str = ''):
+    """Browse files within any configured storage pool path."""
+    all_paths = [str(ISO_DIR)] + [p['path'] for p in _builtin_pools() + _db_pools()]
+
+    if not path:
+        path = str(ISO_DIR)
+
+    real = os.path.realpath(path)
+    if not any(real.startswith(os.path.realpath(p)) for p in all_paths):
+        raise HTTPException(403, 'Path is outside allowed storage pools.')
+
+    if not os.path.isdir(real):
+        raise HTTPException(404, 'Directory not found.')
+
+    entries = []
+    try:
+        for entry in sorted(os.scandir(real), key=lambda e: (not e.is_dir(), e.name.lower())):
+            stat = entry.stat(follow_symlinks=False)
+            from datetime import datetime, timezone
+            entries.append({
+                'name': entry.name,
+                'type': 'directory' if entry.is_dir() else 'file',
+                'size_bytes': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            })
+    except PermissionError:
+        raise HTTPException(403, 'Permission denied.')
+
+    parent = str(Path(real).parent) if real != '/' else None
+    if parent and not any(parent.startswith(os.path.realpath(p)) for p in all_paths):
+        parent = None
+
+    return {'path': real, 'parent': parent, 'entries': entries}
 
 
 @router.delete('/isos/{name}')
