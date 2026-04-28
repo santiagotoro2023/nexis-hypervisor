@@ -35,12 +35,12 @@ _PHRASES = [
 ]
 
 SERVICES = [
-    ('nexis-hypervisor', 'NeXiS Daemon'),
-    ('libvirtd',         'QEMU/KVM'),
-    ('ssh',              'SSH Server'),
-    ('systemd-networkd', 'Networking'),
-    ('chrony',           'NTP Sync'),
-    ('nftables',         'Firewall'),
+    ('nexis-hypervisor-daemon', 'NeXiS Hypervisor Daemon'),
+    ('libvirtd',                'QEMU/KVM'),
+    ('ssh',                     'SSH Server'),
+    ('systemd-networkd',        'Networking'),
+    ('chrony',                  'NTP Sync'),
+    ('nftables',                'Firewall'),
 ]
 
 
@@ -122,7 +122,7 @@ def _svc_enabled(unit):
     return _run('systemctl', 'is-enabled', unit) in ('enabled', 'static')
 
 def _get_nexis_status():
-    return 'ONLINE' if _svc_active('nexis-hypervisor') else 'OFFLINE'
+    return 'ONLINE' if _svc_active('nexis-hypervisor-daemon') else 'OFFLINE'
 
 def _get_uptime():
     try:
@@ -583,13 +583,17 @@ def main(stdscr):
         _safe(stdscr, sy + 4, sx, '  SERVICE STATUS', curses.color_pair(DIM) | curses.A_BOLD)
         _safe(stdscr, sy + 5, sx, '  ' + '─' * 28,   curses.color_pair(DIM))
         for i, (unit, label) in enumerate(SERVICES):
-            active = _svc_active(unit)
-            dot    = '●' if active else '○'
-            col    = GREEN if active else RED
-            sta    = 'ACTIVE  ' if active else 'INACTIVE'
+            exists = _svc_exists(unit)
+            active = _svc_active(unit) if exists else False
+            if not exists:
+                dot = '?'; col = DIM;   sta = '?      '
+            elif active:
+                dot = '●'; col = GREEN; sta = 'ACTIVE  '
+            else:
+                dot = '○'; col = RED;   sta = 'INACTIVE'
             _safe(stdscr, sy + 6 + i, sx,      f'  {dot}', curses.color_pair(col))
-            _safe(stdscr, sy + 6 + i, sx + 4,  f'{label:<18}', curses.color_pair(WHITE))
-            _safe(stdscr, sy + 6 + i, sx + 23, sta,            curses.color_pair(col))
+            _safe(stdscr, sy + 6 + i, sx + 4,  f'{label:<22}', curses.color_pair(WHITE))
+            _safe(stdscr, sy + 6 + i, sx + 27, sta,             curses.color_pair(col))
 
         # ── Footer ────────────────────────────────────────────────────────────
         _hline(stdscr, H - 2, W)
@@ -597,7 +601,7 @@ def main(stdscr):
         _safe(stdscr, H - 1, 2, url, curses.color_pair(ORANGE))
 
         stdscr.refresh()
-        stdscr.timeout(15000)
+        stdscr.timeout(3000)
         k = stdscr.getch()
 
         if   k == ord('1'): screen_node_info(stdscr, H, W)

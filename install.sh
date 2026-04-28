@@ -3,7 +3,7 @@
 # Run as root: curl -sSL <url>/install.sh | sudo bash
 set -euo pipefail
 
-VERSION="2.4.5"
+VERSION="2.4.6"
 INSTALL_DIR="/opt/nexis-hypervisor"
 DATA_DIR="/etc/nexis-hypervisor"
 REPO="https://github.com/santiagotoro2023/nexis-hypervisor"
@@ -89,10 +89,15 @@ _ok "Management scripts installed"
 
 # ── 8. systemd service ───────────────────────────────────────────────────────
 _print "Installing systemd service..."
-cp "$INSTALL_DIR/nexis-hypervisor.service" /etc/systemd/system/
+cp "$INSTALL_DIR/nexis-hypervisor-daemon.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable nexis-hypervisor
-systemctl restart nexis-hypervisor
+# Stop old unit name if still present (migration)
+systemctl stop nexis-hypervisor 2>/dev/null || true
+systemctl disable nexis-hypervisor 2>/dev/null || true
+rm -f /etc/systemd/system/nexis-hypervisor.service
+systemctl daemon-reload
+systemctl enable nexis-hypervisor-daemon
+systemctl restart nexis-hypervisor-daemon
 _ok "Service installed and started"
 
 # ── 9. Firewall ──────────────────────────────────────────────────────────────

@@ -80,9 +80,11 @@ printf '%s\n' "$LATEST" > "$VERSION_FILE"
 # ── 4. Reload and restart ─────────────────────────────────────────────────────
 _print "Reloading systemd and restarting services..."
 systemctl daemon-reload 2>>"$LOG"
-systemctl restart nexis-hypervisor 2>>"$LOG" \
-    && _ok "nexis-hypervisor restarted" \
-    || _print "  (nexis-hypervisor not running — skipped)"
+# Stop old unit name if still present (migration from nexis-hypervisor → nexis-hypervisor-daemon)
+systemctl stop nexis-hypervisor 2>/dev/null || true
+systemctl restart nexis-hypervisor-daemon 2>>"$LOG" \
+    && _ok "nexis-hypervisor-daemon restarted" \
+    || _print "  (nexis-hypervisor-daemon not running — skipped)"
 
 printf '\n'
 _ok "Update complete: $CURRENT → $LATEST"

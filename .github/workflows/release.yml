@@ -84,7 +84,7 @@ jobs:
           # Copy files
           cp -r daemon/ "${PKG}/opt/nexis-hypervisor/"
           cp -r web/dist/ "${PKG}/opt/nexis-hypervisor/web/"
-          cp nexis-hypervisor.service "${PKG}/etc/systemd/system/"
+          cp nexis-hypervisor-daemon.service "${PKG}/etc/systemd/system/"
           # Bundle management scripts so dpkg -i also updates them
           cp iso/nexis-shell.py   "${PKG}/usr/local/bin/nexis-shell"
           cp iso/nexis-update.sh  "${PKG}/usr/local/bin/nexis-update"
@@ -110,12 +110,19 @@ jobs:
           #!/bin/bash
           set -e
           python3 -m venv /opt/nexis-hypervisor/venv
-          /opt/nexis-hypervisor/venv/bin/pip install -q -r /opt/nexis-hypervisor/daemon/requirements.txt
-          echo "${VERSION}" > /opt/nexis-hypervisor/VERSION
+          # pip install is best-effort; existing packages from a prior install are fine
+          /opt/nexis-hypervisor/venv/bin/pip install -q -r /opt/nexis-hypervisor/daemon/requirements.txt || \
+              echo "[nexis] pip install failed — using previously installed packages"
+          # v-prefix required so nexis-update version comparison works correctly
+          echo "v${VERSION}" > /opt/nexis-hypervisor/VERSION
           ln -sf /usr/local/bin/nexis-shell /usr/local/bin/nexis 2>/dev/null || true
+          # Migrate from old unit name if still present
+          systemctl stop nexis-hypervisor 2>/dev/null || true
+          systemctl disable nexis-hypervisor 2>/dev/null || true
+          rm -f /etc/systemd/system/nexis-hypervisor.service
           systemctl daemon-reload
-          systemctl enable nexis-hypervisor
-          systemctl restart nexis-hypervisor || true
+          systemctl enable nexis-hypervisor-daemon
+          systemctl restart nexis-hypervisor-daemon || true
           EOF
           chmod 0755 "${PKG}/DEBIAN/postinst"
 
@@ -123,8 +130,8 @@ jobs:
           cat > "${PKG}/DEBIAN/prerm" << 'EOF'
           #!/bin/bash
           set -e
-          systemctl stop nexis-hypervisor || true
-          systemctl disable nexis-hypervisor || true
+          systemctl stop nexis-hypervisor-daemon || true
+          systemctl disable nexis-hypervisor-daemon || true
           EOF
           chmod 0755 "${PKG}/DEBIAN/prerm"
 

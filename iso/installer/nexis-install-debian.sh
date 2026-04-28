@@ -88,13 +88,12 @@ else
         -r "$INSTALL_DIR/daemon/requirements.txt" --ignore-installed libvirt-python \
     || true
 
-    _log "Installing nexis-hypervisor systemd service..."
-    cat > /etc/systemd/system/nexis-hypervisor.service << 'SVC'
+    _log "Installing nexis-hypervisor-daemon systemd service..."
+    cat > /etc/systemd/system/nexis-hypervisor-daemon.service << 'SVC'
 [Unit]
 Description=NeXiS Hypervisor Daemon
 After=network-online.target libvirtd.service
-Wants=network-online.target
-Requires=libvirtd.service
+Wants=network-online.target libvirtd.service
 
 [Service]
 Type=simple
@@ -106,12 +105,18 @@ Environment=NEXIS_DATA=/etc/nexis-hypervisor
 Environment=NEXIS_PORT=8443
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=nexis-hypervisor-daemon
 
 [Install]
 WantedBy=multi-user.target
 SVC
     systemctl daemon-reload
-    systemctl enable nexis-hypervisor
+    # Remove old unit name if present (migration)
+    systemctl stop nexis-hypervisor 2>/dev/null || true
+    systemctl disable nexis-hypervisor 2>/dev/null || true
+    rm -f /etc/systemd/system/nexis-hypervisor.service
+    systemctl daemon-reload
+    systemctl enable nexis-hypervisor-daemon
 fi
 
 # ── 5. Data directory ─────────────────────────────────────────────────────────
@@ -139,7 +144,7 @@ systemctl restart nftables 2>/dev/null || true
 # ── 7. Start daemon ───────────────────────────────────────────────────────────
 
 _log "Starting NeXiS Hypervisor daemon..."
-systemctl start nexis-hypervisor 2>/dev/null || true
+systemctl start nexis-hypervisor-daemon 2>/dev/null || true
 
 # ── 8. Mark installation complete (sentinel) ──────────────────────────────────
 # Written last so a partial run is detected and retried on next boot.
