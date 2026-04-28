@@ -1,6 +1,6 @@
 # NeXiS Hypervisor
 
-Compute node agent for the NeXiS ecosystem. Install on any Debian 12 machine to expose its QEMU/KVM virtual machines and LXC containers through a secure web interface. Pairs with [NeXiS Controller](https://github.com/santiagotoro2023/nexis-controller) for centralised multi-node management.
+Per-node compute management for the NeXiS ecosystem. Provides a web interface and API for KVM/QEMU virtual machines and LXC containers, with cluster-aware unified views and full Controller integration.
 
 ---
 
@@ -8,53 +8,61 @@ Compute node agent for the NeXiS ecosystem. Install on any Debian 12 machine to 
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  NeXiS Controller   — central management plane · SSO         │
-│    ↕ authenticated API                                        │
+│  NeXiS Controller   — AI assistant · SSO provider            │
+│    ↕ authenticated API + LLM tool calls                      │
 │  NeXiS Hypervisor   — one per compute node (you are here)    │
 └──────────────────────────────────────────────────────────────┘
         ↑
-  NeXiS Worker  — Android / desktop client
+  NeXiS Worker  — Android / Linux desktop client
 ```
 
 | Repo | Role |
 |------|------|
-| [nexis-controller](https://github.com/santiagotoro2023/nexis-controller) | Manages multiple hypervisor nodes, provides SSO |
-| **nexis-hypervisor** | Runs on each compute node; exposes VMs, containers, and storage |
-| [nexis-worker](https://github.com/santiagotoro2023/nexis-worker) | Mobile and desktop client for the controller and hypervisors |
-
-Hypervisors can be used standalone or paired with a Controller. When paired, the Controller's SSO session is accepted — users authenticate once and reach all nodes.
+| [nexis-controller](https://github.com/santiagotoro2023/nexis-controller) | Central AI assistant · SSO provider · management plane |
+| **nexis-hypervisor** | Per-node KVM/LXC management — you are here |
+| [nexis-worker](https://github.com/santiagotoro2023/nexis-worker) | Android and desktop client |
 
 ---
 
 ## Capabilities
 
-**Virtual Machines (QEMU/KVM)**
-- Create, start, stop, reboot, delete VMs with configurable vCPU, RAM, and disk
-- Snapshot management
-- Browser-based VNC console via noVNC
+**Virtual Machines (KVM/QEMU)**
+- Provision, start, stop, reboot, force-stop, delete
+- VNC console with clipboard sync (paste from host)
+- Snapshots — create, restore, delete
+- Clone VM · Convert to template · Backup disk · Live migrate
 
 **Containers (LXC)**
-- Create, start, stop, restart, delete containers
-- Interactive shell via xterm.js WebSocket PTY
+- Create, start, stop, delete LXC containers
+- Browser-attached shell
 
-**Infrastructure**
-- Storage pool and ISO image management
-- Virtual network and bridge configuration
-- Live resource metrics (CPU, RAM, disk, network I/O) streamed via SSE
+**Cluster**
+- Multi-node clustering — unified VM/container view across all nodes
+- Per-node filter tabs or all-nodes aggregate view
+- Remote VM actions (start/stop on any node from any node's UI)
 
-**Security**
-- Self-signed TLS on port 8443 (TOFU trust model)
-- Bearer token authentication with SQLite-backed sessions
-- First-boot setup wizard enforces credential change on first access
+**Storage**
+- Local directory and NFS storage pool management
+- ISO library — upload, delete, catalog download
+- ISO catalog — one-click download of Ubuntu, Debian, Alpine, Rocky, FreeBSD, TrueNAS, and more
+- Cross-cluster ISO visibility
+
+**System**
+- One-click web UI update (git pull → pip → npm → restart, streamed live)
+- Controller pairing and SSO
+
+**Controller Integration**
+- Pair with NeXiS Controller for unified SSO across all nodes
+- Controller LLM issues VM actions as tool calls (start, stop, create, snapshot, migrate)
+- 30-second status feed to Controller
 
 ---
 
 ## Requirements
 
-- Debian 12 (Bookworm) · x86_64
+- Debian 12 (Bookworm) or Ubuntu 22.04+ · x86_64
 - Root / sudo access
-- Internet connectivity (for installation)
-- CPU with hardware virtualisation (Intel VT-x / AMD-V) for KVM
+- KVM-capable CPU (`egrep -c '(vmx|svm)' /proc/cpuinfo` > 0)
 
 ---
 
@@ -64,74 +72,63 @@ Hypervisors can be used standalone or paired with a Controller. When paired, the
 curl -sSL https://raw.githubusercontent.com/santiagotoro2023/nexis-hypervisor/main/install-nexis-hypervisor.sh | sudo bash
 ```
 
-Or clone first and run locally:
-
-```bash
-git clone https://github.com/santiagotoro2023/nexis-hypervisor
-sudo bash nexis-hypervisor/install-nexis-hypervisor.sh
-```
-
-The installer:
-1. Installs system packages (qemu-kvm, libvirt, lxc, novnc, python3)
-2. Clones / updates the repository to `/opt/nexis-hypervisor`
-3. Creates a Python virtual environment and installs daemon dependencies
-4. Builds the web interface
-5. Installs and starts `nexis-hypervisor-daemon.service`
+The installer handles: packages, libvirt, QEMU, LXC, Python venv, web UI build, systemd service.
 
 ---
 
 ## First Access
 
-1. Open `https://<host-ip>:8443` in a browser
+1. Open `https://<host-ip>:8443`
 2. Accept the self-signed certificate
-3. The setup wizard runs automatically on first visit — set a hostname and access code
-4. Default credentials: **`creator` / `Asdf1234!`** — change immediately
+3. Complete the setup wizard (set credentials, optionally link Controller)
+4. Default: `creator` / `Asdf1234!` — change on first login
 
 ---
 
-## Pairing with NeXiS Controller
+## Cluster Setup
 
-1. In the hypervisor web UI, navigate to **Controller Link**
-2. Enter the Controller URL and a pairing token (generated in the Controller admin panel)
-3. Once paired, the Controller's SSO sessions are accepted — no separate login required from connected clients
+1. Install the hypervisor on each node
+2. On the primary node go to **Cluster → Add Node**
+3. Enter the remote node's URL and its API token
+4. All nodes' VMs appear in the unified **Virtual Instances** view
+
+---
+
+## Pairing with the Controller
+
+1. In the Controller web UI, go to **Nodes → Add Hypervisor**
+2. Enter this node's URL and API token (found in this node's **System** page)
+3. The node appears in the Controller — Workers can manage VMs via Controller SSO
 
 ---
 
 ## API
 
-The daemon exposes a REST API at `https://<host>:8443/api/`. All endpoints except auth require a `Bearer <token>` header.
+All endpoints require `Authorization: Bearer <token>`.
 
-| Prefix | Description |
-|--------|-------------|
-| `GET /api/auth/status` | Setup and auth status (public) |
-| `POST /api/auth/login` | Authenticate; returns session token |
-| `GET /api/vms` | List virtual machines |
-| `POST /api/vms` | Create virtual machine |
-| `POST /api/vms/{id}/start\|stop\|reboot` | VM power control |
-| `GET /api/vms/{id}/console` | VNC WebSocket (noVNC) |
-| `GET /api/containers` | List containers |
-| `POST /api/containers` | Create container |
-| `GET /api/containers/{id}/shell` | Shell WebSocket (xterm.js) |
-| `GET /api/storage` | Storage pools and volumes |
-| `GET /api/network` | Virtual networks |
-| `GET /api/metrics/stream` | SSE metrics stream |
-| `GET /api/system/info` | Hostname and build version |
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/auth/login` | Authenticate (public) |
+| `GET /api/vms` | List local VMs |
+| `POST /api/vms` | Create VM |
+| `POST /api/vms/{id}/start\|stop\|reboot` | Power operations |
+| `POST /api/vms/{id}/clone` | Clone VM |
+| `POST /api/vms/{id}/backup` | Backup VM disk |
+| `POST /api/vms/{id}/migrate` | Live migrate |
+| `GET /api/vms/templates` | List templates |
+| `GET /api/vms/{id}/snapshots` | List snapshots |
+| `POST /api/vms/{id}/snapshots` | Create snapshot |
+| `GET /api/containers` | List LXC containers |
+| `GET /api/storage/pools` | List storage pools |
+| `POST /api/storage/pools` | Add pool (local/NFS) |
+| `GET /api/storage/catalog` | ISO catalog |
+| `POST /api/storage/isos/fetch` | Download ISO (SSE) |
+| `GET /api/cluster/vms` | All VMs across cluster |
+| `POST /api/cluster/nodes/join` | Add cluster node |
+| `GET /api/metrics/stream` | Live metrics (SSE) |
+| `GET /api/system/info` | Hostname / version |
+| `POST /api/system/update` | Apply update (SSE) |
 | `GET /api/nexis/status` | Controller pairing status |
-
-Interactive API docs: `https://<host>:8443/api/docs`
-
----
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|----------------------|---------|-------------|
-| `NEXIS_DATA` | `/etc/nexis-hypervisor` | Config and database directory |
-| `NEXIS_PORT` | `8443` | HTTPS listen port |
-| `NEXIS_HOST` | `0.0.0.0` | Bind address |
-| `NEXIS_ISO_DIR` | `/var/lib/libvirt/images` | ISO storage path |
-
-Runtime configuration (pairing, hostname) is stored in `/etc/nexis-hypervisor/config.json`.
 
 ---
 
@@ -139,9 +136,10 @@ Runtime configuration (pairing, hostname) is stored in `/etc/nexis-hypervisor/co
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18 · TypeScript · Vite · Tailwind CSS |
-| Backend | Python 3.11 · FastAPI · uvicorn |
-| Virtualisation | libvirt-python (QEMU/KVM) · LXC CLI |
-| Console | noVNC (VM) · xterm.js + WebSocket PTY (container) |
-| Auth / TLS | Bearer token · SQLite · `cryptography` library |
-| Metrics | psutil |
+| Daemon | Python 3.11 · FastAPI · uvicorn |
+| Virtualisation | libvirt · QEMU/KVM · LXC |
+| Console | noVNC (WebSocket VNC proxy) |
+| Auth | Bearer token · SHA-256 · SQLite |
+| Realtime | Server-Sent Events |
+| Web UI | React 18 · TypeScript · Vite · Tailwind CSS |
+| Service | systemd `nexis-hypervisor-daemon.service` |

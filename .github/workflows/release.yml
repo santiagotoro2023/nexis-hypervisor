@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build web UI
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Build Python venv
+        run: |
+          python -m venv venv
+          ./venv/bin/pip install --quiet --upgrade pip
+          ./venv/bin/pip install --quiet -r daemon/requirements.txt
+
+      - name: Get version
+        id: ver
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Assemble .deb package tree
+        run: |
+          V="${{ steps.ver.outputs.VERSION }}"
+          mkdir -p pkg/opt/nexis-hypervisor/web
+          cp -r daemon pkg/opt/nexis-hypervisor/
+          cp -r web/dist pkg/opt/nexis-hypervisor/web/
+          cp -r venv pkg/opt/nexis-hypervisor/
+          cp VERSION pkg/opt/nexis-hypervisor/
+          mkdir -p pkg/etc/systemd/system
+          cp nexis-hypervisor-daemon.service pkg/etc/systemd/system/
+          mkdir -p pkg/DEBIAN
+          cat > pkg/DEBIAN/control <<EOF
+          Package: nexis-hypervisor
+          Version: ${V}
+          Architecture: amd64
+          Maintainer: NeXiS Project <admin@nexis.local>
+          Depends: qemu-kvm, libvirt-daemon-system, lxc, python3, python3-venv, curl, git
+          Recommends: novnc, websockify
+          Description: NeXiS Hypervisor — KVM/LXC management daemon
+           Web-based hypervisor management for KVM/QEMU virtual machines and
+           LXC containers with cluster support. Part of the NeXiS ecosystem.
+          Homepage: https://github.com/santiagotoro2023/nexis-hypervisor
+          EOF
+          cp scripts/postinst.sh pkg/DEBIAN/postinst
+          cp scripts/postrm.sh pkg/DEBIAN/postrm
+          chmod 755 pkg/DEBIAN/postinst pkg/DEBIAN/postrm
+          dpkg-deb --build --root-owner-group pkg \
+            nexis-hypervisor_${V}_amd64.deb
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "NeXiS Hypervisor ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            **Fresh install on Debian 12 / Ubuntu 22.04+:**
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/santiagotoro2023/nexis-hypervisor/main/install-nexis-hypervisor.sh | sudo bash
+            ```
+
+            **Update via .deb (if already installed):**
+            ```bash
+            wget https://github.com/santiagotoro2023/nexis-hypervisor/releases/download/${{ github.ref_name }}/nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
+            sudo dpkg -i nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
+            ```
+
+            After installation, open `https://<host-ip>:8443` and complete the setup wizard.
+
+            ---
+            Part of the [NeXiS ecosystem](https://github.com/santiagotoro2023).
+          files: |
+            nexis-hypervisor_${{ steps.ver.outputs.VERSION }}_amd64.deb
+            install-nexis-hypervisor.sh
+          generate_release_notes: false
+          fail_on_unmatched_files: true

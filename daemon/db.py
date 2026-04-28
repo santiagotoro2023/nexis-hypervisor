@@ -45,6 +45,7 @@ def init():
             name       TEXT NOT NULL,
             url        TEXT NOT NULL,
             role       TEXT NOT NULL DEFAULT 'worker',
+            api_token  TEXT NOT NULL DEFAULT '',
             joined_at  TEXT NOT NULL,
             last_seen  TEXT
         );
@@ -61,6 +62,19 @@ def init():
             vm_id       TEXT PRIMARY KEY,
             is_template INTEGER NOT NULL DEFAULT 0,
             notes       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS storage_pools (
+            id      TEXT PRIMARY KEY,
+            name    TEXT NOT NULL UNIQUE,
+            type    TEXT NOT NULL DEFAULT 'local',
+            path    TEXT NOT NULL,
+            options TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
     """)
     # Seed default local user if absent
