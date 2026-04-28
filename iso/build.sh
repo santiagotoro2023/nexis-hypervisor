@@ -211,12 +211,11 @@ _ok "/nexis/ staged"
 mkdir -p "$ISO_SRC/boot/grub"
 cat > "$ISO_SRC/boot/grub/grub.cfg" << EOF
 # NeXiS Hypervisor ${VERSION}
+# Force VGA text console — prevents "no suitable video mode" on VMware/UEFI
+terminal_input  console
+terminal_output console
 set default=0
 set timeout=5
-set color_normal=light-gray/black
-set color_highlight=yellow/black
-set menu_color_normal=light-gray/black
-set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
     linux  /live/vmlinuz boot=live components nomodeset quiet
