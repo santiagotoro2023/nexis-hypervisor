@@ -225,7 +225,7 @@ set menu_color_normal=brown/black
 set menu_color_highlight=yellow/black
 
 menuentry "Install NeXiS Hypervisor ${VERSION}" {
-    linux  /live/vmlinuz boot=live components nomodeset quiet
+    linux  /live/vmlinuz boot=live components quiet
     initrd /live/initrd.img
 }
 EOF
