@@ -89,7 +89,7 @@ export function Storage() {
 
     const token = sessionStorage.getItem('nx_token')
     try {
-      const res = await fetch('/api/storage/isos/fetch', {
+      const res = await window.fetch('/api/storage/isos/fetch', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
