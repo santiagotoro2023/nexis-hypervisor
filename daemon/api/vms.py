@@ -21,6 +21,17 @@ class SnapshotRequest(BaseModel):
     name: str
 
 
+class CloneRequest(BaseModel):
+    name: str
+
+
+class MigrateRequest(BaseModel):
+    target_uri: str
+    live: bool = True
+
+
+# ── Static collection routes (must precede /{vm_id}) ─────────────────────────
+
 @router.get('')
 def list_vms():
     try:
@@ -38,6 +49,24 @@ def create_vm(req: CreateVM):
     except Exception as e:
         raise HTTPException(400, str(e))
 
+
+@router.get('/templates')
+def list_templates():
+    try:
+        return lv.list_templates()
+    except Exception as e:
+        raise HTTPException(503, str(e))
+
+
+@router.get('/backups')
+def list_backups():
+    try:
+        return lv.list_backups()
+    except Exception as e:
+        raise HTTPException(503, str(e))
+
+
+# ── Single VM routes ──────────────────────────────────────────────────────────
 
 @router.get('/{vm_id}')
 def get_vm(vm_id: str):
@@ -98,6 +127,67 @@ def delete_vm(vm_id: str):
     except Exception as e:
         raise HTTPException(400, str(e))
 
+
+@router.post('/{vm_id}/clone')
+def clone_vm(vm_id: str, req: CloneRequest):
+    try:
+        vm = lv.clone_vm(vm_id, req.name)
+        db.log_action('vm.clone', f'{vm_id}->{req.name}')
+        return vm
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/template')
+def mark_template(vm_id: str):
+    try:
+        lv.get_vm(vm_id)
+        lv.set_template_flag(vm_id, True)
+        db.log_action('vm.template.set', vm_id)
+        return {'ok': True}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete('/{vm_id}/template')
+def unmark_template(vm_id: str):
+    try:
+        lv.set_template_flag(vm_id, False)
+        db.log_action('vm.template.unset', vm_id)
+        return {'ok': True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/backup')
+def backup_vm(vm_id: str):
+    try:
+        result = lv.backup_vm(vm_id)
+        db.log_action('vm.backup', vm_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/migrate')
+def migrate_vm(vm_id: str, req: MigrateRequest):
+    try:
+        lv.migrate_vm(vm_id, req.target_uri, req.live)
+        db.log_action('vm.migrate', f'{vm_id}->{req.target_uri}')
+        return {'ok': True}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+# ── Snapshots ─────────────────────────────────────────────────────────────────
 
 @router.get('/{vm_id}/snapshots')
 def list_snapshots(vm_id: str):

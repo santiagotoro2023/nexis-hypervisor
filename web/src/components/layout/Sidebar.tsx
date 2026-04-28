@@ -1,9 +1,11 @@
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Server, Box, HardDrive, Network,
-  LogOut, Zap, Activity,
+  LogOut, Zap, Activity, Settings,
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
+import { useEffect, useState } from 'react'
+import { api } from '../../api/client'
 
 const NAV = [
   { to: '/',           icon: LayoutDashboard, label: 'SYSTEM OVERVIEW' },
@@ -12,10 +14,18 @@ const NAV = [
   { to: '/storage',    icon: HardDrive,       label: 'STORAGE' },
   { to: '/network',    icon: Network,         label: 'NETWORK' },
   { to: '/nexis',      icon: Zap,             label: 'CONTROLLER LINK' },
+  { to: '/system',     icon: Settings,        label: 'SYSTEM' },
 ]
 
 export function Sidebar() {
   const { logout } = useAuth()
+  const [version, setVersion] = useState('—')
+
+  useEffect(() => {
+    api.get<{ version?: string }>('/system/info')
+      .then(d => setVersion(d.version ?? '—'))
+      .catch(() => {})
+  }, [])
 
   return (
     <aside className="w-56 shrink-0 flex flex-col bg-nx-bg2 border-r border-nx-border h-screen sticky top-0">
@@ -61,7 +71,7 @@ export function Sidebar() {
         </button>
         <div className="mt-2 px-3 flex items-center gap-1.5">
           <Activity size={10} className="text-nx-fg2" />
-          <span className="text-nx-fg2 text-[10px] tracking-widest">NX-HV · BUILD 1.0.0</span>
+          <span className="text-nx-fg2 text-[10px] tracking-widest">NX-HV · BUILD {version}</span>
         </div>
       </div>
     </aside>

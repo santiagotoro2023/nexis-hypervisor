@@ -245,3 +245,143 @@ def delete_snapshot(vm_id: str, snap_name: str):
     dom = _find(vm_id)
     snap = dom.snapshotLookupByName(snap_name)
     snap.delete()
+
+
+# ── Clone ─────────────────────────────────────────────────────────────────────
+
+def clone_vm(vm_id: str, new_name: str) -> dict:
+    import os, subprocess, uuid, re
+
+    dom = _find(vm_id)
+    xml_str = dom.XMLDesc()
+    xml = ET.fromstring(xml_str)
+
+    src_disk = None
+    for disk in xml.findall('.//disk[@type="file"][@device="disk"]'):
+        src = disk.find('source')
+        if src is not None:
+            src_disk = src.get('file', '')
+            break
+    if not src_disk:
+        raise ValueError('Source VM has no disk image')
+
+    dst_disk = f'/var/lib/libvirt/images/{new_name}.qcow2'
+    subprocess.run(
+        ['qemu-img', 'convert', '-f', 'qcow2', '-O', 'qcow2', src_disk, dst_disk],
+        check=True, capture_output=True,
+    )
+
+    new_uuid = str(uuid.uuid4())
+    xml_str = re.sub(r'<uuid>[^<]*</uuid>', f'<uuid>{new_uuid}</uuid>', xml_str)
+    xml_str = re.sub(r'<name>[^<]*</name>', f'<name>{new_name}</name>', xml_str, count=1)
+    xml_str = xml_str.replace(src_disk, dst_disk)
+    xml_str = re.sub(r"port='-?\d+'", "port='-1'", xml_str)
+    xml_str = re.sub(r"<mac address='[^']*'/>", '', xml_str)
+
+    new_dom = _conn().defineXML(xml_str)
+    return _domain_info(new_dom)
+
+
+# ── Backup ────────────────────────────────────────────────────────────────────
+
+_BACKUP_DIR = '/var/lib/nexis/backups'
+
+
+def backup_vm(vm_id: str) -> dict:
+    import os, subprocess
+    from datetime import datetime, timezone
+
+    dom = _find(vm_id)
+    xml = ET.fromstring(dom.XMLDesc())
+
+    src_disk = None
+    for disk in xml.findall('.//disk[@type="file"][@device="disk"]'):
+        src = disk.find('source')
+        if src is not None:
+            src_disk = src.get('file', '')
+            break
+    if not src_disk:
+        raise ValueError('VM has no disk image')
+
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    dst = f'{_BACKUP_DIR}/{dom.name()}_{ts}.qcow2'
+
+    subprocess.run(
+        ['qemu-img', 'convert', '-c', '-f', 'qcow2', '-O', 'qcow2', src_disk, dst],
+        check=True, capture_output=True,
+    )
+    with open(f'{dst}.xml', 'w') as f:
+        f.write(dom.XMLDesc())
+
+    size = os.path.getsize(dst)
+    return {'path': dst, 'size_bytes': size, 'name': os.path.basename(dst)}
+
+
+def list_backups() -> list[dict]:
+    import os
+    if not os.path.isdir(_BACKUP_DIR):
+        return []
+    result = []
+    for fname in sorted(os.listdir(_BACKUP_DIR)):
+        if not fname.endswith('.qcow2'):
+            continue
+        path = os.path.join(_BACKUP_DIR, fname)
+        try:
+            size = os.path.getsize(path)
+            mtime = os.path.getmtime(path)
+            from datetime import datetime, timezone
+            created = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+        except Exception:
+            size, created = 0, ''
+        result.append({'name': fname, 'path': path, 'size_bytes': size, 'created': created})
+    return result
+
+
+# ── Migrate ───────────────────────────────────────────────────────────────────
+
+def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
+    if not _LIBVIRT:
+        raise RuntimeError('libvirt-python not installed')
+
+    dom = _find(vm_id)
+    flags = 0
+    if live:
+        flags |= getattr(libvirt, 'VIR_MIGRATE_LIVE', 1)
+    flags |= getattr(libvirt, 'VIR_MIGRATE_PERSIST_DEST', 8)
+    flags |= getattr(libvirt, 'VIR_MIGRATE_UNDEFINE_SOURCE', 16)
+
+    dest_conn = libvirt.open(target_uri)
+    try:
+        dom.migrate(dest_conn, flags, None, None, 0)
+    finally:
+        dest_conn.close()
+
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+
+def set_template_flag(vm_id: str, is_template: bool) -> None:
+    import db
+    c = db.conn()
+    c.execute(
+        'INSERT INTO vm_metadata (vm_id, is_template) VALUES (?, ?)'
+        ' ON CONFLICT(vm_id) DO UPDATE SET is_template=excluded.is_template',
+        (vm_id, 1 if is_template else 0),
+    )
+    c.commit()
+
+
+def list_templates() -> list[dict]:
+    import db
+    rows = db.conn().execute(
+        'SELECT vm_id FROM vm_metadata WHERE is_template=1'
+    ).fetchall()
+    template_ids = {r['vm_id'] for r in rows}
+    result = []
+    try:
+        for vm in list_vms():
+            if vm['id'] in template_ids:
+                result.append({**vm, 'is_template': True})
+    except Exception:
+        pass
+    return result

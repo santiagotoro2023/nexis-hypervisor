@@ -11,6 +11,7 @@ import { ContainerShell } from './components/console/ContainerShell'
 import { Storage } from './components/storage/Storage'
 import { Network } from './components/network/Network'
 import { NexisController } from './components/nexis/NexisController'
+import { SystemPage } from './components/system/SystemPage'
 import { NxSpinner } from './components/common/NxSpinner'
 
 function AppRoutes() {
@@ -47,6 +48,7 @@ function AppRoutes() {
       <Route path="/storage" element={<Storage />} />
       <Route path="/network" element={<Network />} />
       <Route path="/nexis" element={<NexisController />} />
+      <Route path="/system" element={<SystemPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

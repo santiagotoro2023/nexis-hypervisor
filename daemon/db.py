@@ -56,6 +56,12 @@ def init():
             detail TEXT,
             source TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS vm_metadata (
+            vm_id       TEXT PRIMARY KEY,
+            is_template INTEGER NOT NULL DEFAULT 0,
+            notes       TEXT
+        );
     """)
     # Seed default local user if absent
     import hashlib
