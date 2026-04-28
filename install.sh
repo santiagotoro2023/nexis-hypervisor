@@ -78,7 +78,16 @@ mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR"
 _ok "Data directory created at $DATA_DIR"
 
-# ── 7. systemd service ───────────────────────────────────────────────────────
+# ── 7. Management scripts ────────────────────────────────────────────────────
+_print "Installing management scripts..."
+install -m 755 "$INSTALL_DIR/iso/nexis-update.sh"  /usr/local/bin/nexis-update
+install -m 755 "$INSTALL_DIR/iso/nexis-shell.py"   /usr/local/bin/nexis-shell
+install -m 755 "$INSTALL_DIR/iso/firstboot-tui.py" /usr/local/bin/nexis-firstboot
+ln -sf /usr/local/bin/nexis-shell /usr/local/bin/nexis
+printf 'v%s\n' "$VERSION" > "$INSTALL_DIR/VERSION"
+_ok "Management scripts installed"
+
+# ── 8. systemd service ───────────────────────────────────────────────────────
 _print "Installing systemd service..."
 cp "$INSTALL_DIR/nexis-hypervisor.service" /etc/systemd/system/
 systemctl daemon-reload
@@ -86,7 +95,7 @@ systemctl enable nexis-hypervisor
 systemctl restart nexis-hypervisor
 _ok "Service installed and started"
 
-# ── 8. Firewall ──────────────────────────────────────────────────────────────
+# ── 9. Firewall ──────────────────────────────────────────────────────────────
 if command -v ufw &>/dev/null; then
     ufw allow 8443/tcp comment 'Nexis Hypervisor' 2>/dev/null || true
     _ok "Firewall rule added (port 8443)"

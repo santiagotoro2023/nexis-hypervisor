@@ -83,7 +83,9 @@ app.include_router(cluster.router,    prefix='/api/cluster',    tags=['cluster']
 # Serve built frontend
 web_dist = config.WEB_DIR
 if web_dist.exists():
-    app.mount('/novnc', StaticFiles(directory='/usr/share/novnc'), name='novnc')
+    novnc_dir = Path('/usr/share/novnc')
+    if novnc_dir.exists():
+        app.mount('/novnc', StaticFiles(directory=str(novnc_dir)), name='novnc')
     app.mount('/assets', StaticFiles(directory=str(web_dist / 'assets')), name='assets')
 
     @app.get('/{full_path:path}')
