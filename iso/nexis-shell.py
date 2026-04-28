@@ -111,6 +111,10 @@ def _get_containers():
     out = _run('lxc-ls', '--running')
     return len(out.split()) if out else 0
 
+def _svc_exists(unit):
+    rc, _ = _run_rc('systemctl', 'cat', unit)
+    return rc == 0
+
 def _svc_active(unit):
     return _run('systemctl', 'is-active', unit) == 'active'
 
@@ -273,15 +277,21 @@ def screen_services(stdscr, H, W):
         _safe(win, 2, 3, '─' * (win_w - 6), curses.color_pair(DIM))
 
         for i, (unit, label) in enumerate(SERVICES):
-            active  = _svc_active(unit)
-            enabled = _svc_enabled(unit)
+            exists  = _svc_exists(unit)
+            active  = _svc_active(unit) if exists else False
+            enabled = _svc_enabled(unit) if exists else False
             is_sel  = (i == sel)
             rev     = curses.A_REVERSE if is_sel else 0
-            sta_col = GREEN if active else RED
-            en_col  = GREEN if enabled else RED
-            dot     = '●' if active else '○'
-            sta     = 'ACTIVE  ' if active else 'INACTIVE'
-            en_str  = 'AUTO' if enabled else 'OFF '
+
+            if not exists:
+                dot, sta, en_str = '?', 'NOT FOUND ', '----'
+                sta_col = DIM; en_col = DIM
+            elif active:
+                dot, sta, en_str = '●', 'ACTIVE    ', 'AUTO' if enabled else 'OFF '
+                sta_col = GREEN;  en_col = GREEN if enabled else RED
+            else:
+                dot, sta, en_str = '○', 'INACTIVE  ', 'AUTO' if enabled else 'OFF '
+                sta_col = RED;    en_col = GREEN if enabled else RED
 
             _safe(win, 3 + i, 3,  dot,             curses.color_pair(sta_col) | rev)
             _safe(win, 3 + i, 5,  f'{label:<20}',  curses.color_pair(WHITE)   | rev)
@@ -309,7 +319,10 @@ def screen_services(stdscr, H, W):
             sel = (sel + 1) % n
         else:
             unit = SERVICES[sel][0]
-            if k in (ord('s'), ord('S')):
+            if not _svc_exists(unit):
+                msg = f'{unit}: not installed — run [U] Update or check nexis-install.service'
+                msg_col = DIM
+            elif k in (ord('s'), ord('S')):
                 rc, out = _run_rc('systemctl', 'start', unit)
                 msg = f'start {unit}: {"ok" if rc == 0 else out[:48]}'
                 msg_col = GREEN if rc == 0 else RED

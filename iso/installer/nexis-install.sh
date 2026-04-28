@@ -438,7 +438,7 @@ cat > /mnt/etc/systemd/system/nexis-install.service << 'SVC'
 Description=NeXiS Hypervisor Installation
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=!/opt/nexis-hypervisor
+ConditionPathExists=!/opt/nexis-hypervisor/.installed
 
 [Service]
 Type=oneshot
