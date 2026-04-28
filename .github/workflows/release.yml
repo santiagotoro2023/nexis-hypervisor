@@ -79,11 +79,17 @@ jobs:
           mkdir -p "${PKG}/opt/nexis-hypervisor/web/dist"
           mkdir -p "${PKG}/etc/systemd/system"
           mkdir -p "${PKG}/etc/nexis-hypervisor"
+          mkdir -p "${PKG}/usr/local/bin"
 
           # Copy files
           cp -r daemon/ "${PKG}/opt/nexis-hypervisor/"
           cp -r web/dist/ "${PKG}/opt/nexis-hypervisor/web/"
           cp nexis-hypervisor.service "${PKG}/etc/systemd/system/"
+          # Bundle management scripts so dpkg -i also updates them
+          cp iso/nexis-shell.py   "${PKG}/usr/local/bin/nexis-shell"
+          cp iso/nexis-update.sh  "${PKG}/usr/local/bin/nexis-update"
+          cp iso/firstboot-tui.py "${PKG}/usr/local/bin/nexis-firstboot"
+          chmod +x "${PKG}/usr/local/bin/"nexis-*
 
           # Control file
           cat > "${PKG}/DEBIAN/control" << EOF
@@ -99,12 +105,14 @@ jobs:
            managing virtual machines and containers on a Linux host.
           EOF
 
-          # Postinst: setup venv and enable service
-          cat > "${PKG}/DEBIAN/postinst" << 'EOF'
+          # Postinst: setup venv, record version, enable service
+          cat > "${PKG}/DEBIAN/postinst" << EOF
           #!/bin/bash
           set -e
           python3 -m venv /opt/nexis-hypervisor/venv
           /opt/nexis-hypervisor/venv/bin/pip install -q -r /opt/nexis-hypervisor/daemon/requirements.txt
+          echo "${VERSION}" > /opt/nexis-hypervisor/VERSION
+          ln -sf /usr/local/bin/nexis-shell /usr/local/bin/nexis 2>/dev/null || true
           systemctl daemon-reload
           systemctl enable nexis-hypervisor
           systemctl restart nexis-hypervisor || true

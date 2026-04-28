@@ -421,6 +421,56 @@ def screen_password(stdscr, H, W):
         return
 
 
+def screen_update(stdscr, H, W):
+    win_h = H - 4
+    win_w = W - 6
+    win = curses.newwin(win_h, win_w, 2, 3)
+    win.keypad(True)
+    _border(win, 'SYSTEM UPDATE')
+    _safe(win, 2, 3, 'Connecting to GitHub...', curses.color_pair(DIM))
+    win.refresh()
+
+    lines = []
+    row = 3
+    rc = 1
+    try:
+        proc = subprocess.Popen(
+            ['nexis-update'],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1)
+        for line in proc.stdout:
+            line = line.rstrip()
+            lines.append(line)
+            if row < win_h - 4:
+                col = GREEN if '  ok' in line else (RED if '  err' in line else DIM)
+                _safe(win, row, 3, line[:win_w - 7], curses.color_pair(col))
+                row += 1
+            else:
+                # Scroll: shift lines up, redraw
+                for i in range(3, win_h - 4):
+                    win.move(i, 3)
+                    win.clrtoeol()
+                visible = lines[-(win_h - 7):]
+                for i, l in enumerate(visible):
+                    col = GREEN if '  ok' in l else (RED if '  err' in l else DIM)
+                    _safe(win, 3 + i, 3, l[:win_w - 7], curses.color_pair(col))
+            win.refresh()
+        proc.wait()
+        rc = proc.returncode
+    except FileNotFoundError:
+        _safe(win, row, 3, 'nexis-update not found at /usr/local/bin/nexis-update',
+              curses.color_pair(RED))
+        row += 1
+
+    result_col = GREEN if rc == 0 else RED
+    result_msg = 'Update finished successfully.' if rc == 0 else f'Update failed (exit {rc}).'
+    _safe(win, min(row + 1, win_h - 4), 3, result_msg,
+          curses.color_pair(result_col) | curses.A_BOLD)
+    _safe(win, win_h - 2, 3, 'Press any key to return...', curses.color_pair(DIM))
+    win.refresh()
+    win.getch()
+
+
 def screen_confirm_reboot(stdscr, H, W):
     win = curses.newwin(5, 40, H // 2 - 2, W // 2 - 20)
     win.keypad(True)
@@ -459,6 +509,7 @@ def main(stdscr):
         ('3', 'NEXIS SERVICES'),
         ('4', 'SYSTEM LOGS'),
         ('5', 'CHANGE PASSWORD'),
+        ('U', 'UPDATE SYSTEM'),
         ('R', 'REBOOT'),
         ('0', 'ACCESS LINUX SHELL'),
     ]
@@ -541,6 +592,7 @@ def main(stdscr):
         elif k == ord('3'): screen_services(stdscr, H, W)
         elif k == ord('4'): screen_logs(stdscr, H, W)
         elif k == ord('5'): screen_password(stdscr, H, W)
+        elif k in (ord('u'), ord('U')): screen_update(stdscr, H, W)
         elif k in (ord('r'), ord('R')): screen_confirm_reboot(stdscr, H, W)
         elif k == ord('0'): break
         elif k == -1: phrase_idx += 1

@@ -168,6 +168,7 @@ chmod +x "$ROOTFS/usr/local/bin/nexis-install"
 cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$ROOTFS/opt/nexis-installer/install.sh"  2>/dev/null || true
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ROOTFS/opt/nexis-installer/"             2>/dev/null || true
 cp "$SCRIPT_DIR/nexis-shell.py"                    "$ROOTFS/opt/nexis-installer/"             2>/dev/null || true
+cp "$SCRIPT_DIR/nexis-update.sh"                   "$ROOTFS/opt/nexis-installer/nexis-update" 2>/dev/null || true
 
 _ok "Live system configured"
 
@@ -204,6 +205,7 @@ mkdir -p "$ISO_SRC/nexis"
 cp "$SCRIPT_DIR/installer/nexis-install-debian.sh" "$ISO_SRC/nexis/install.sh"  2>/dev/null || true
 cp "$SCRIPT_DIR/firstboot-tui.py"                  "$ISO_SRC/nexis/"            2>/dev/null || true
 cp "$SCRIPT_DIR/nexis-shell.py"                    "$ISO_SRC/nexis/"            2>/dev/null || true
+cp "$SCRIPT_DIR/nexis-update.sh"                   "$ISO_SRC/nexis/nexis-update" 2>/dev/null || true
 _ok "/nexis/ staged"
 
 # ── 8. GRUB config ────────────────────────────────────────────────────────────

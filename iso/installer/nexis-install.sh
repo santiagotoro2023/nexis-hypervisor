@@ -421,13 +421,16 @@ if [ -n "$MEDIA" ]; then
     cp "$MEDIA/nexis/install.sh"       /mnt/opt/nexis-install.sh
     cp "$MEDIA/nexis/firstboot-tui.py" /mnt/usr/local/bin/nexis-firstboot
     cp "$MEDIA/nexis/nexis-shell.py"   /mnt/usr/local/bin/nexis-shell
+    cp "$MEDIA/nexis/nexis-update"     /mnt/usr/local/bin/nexis-update     2>/dev/null || true
 else
-    cp /opt/nexis-installer/install.sh        /mnt/opt/nexis-install.sh        2>/dev/null || true
+    cp /opt/nexis-installer/install.sh        /mnt/opt/nexis-install.sh          2>/dev/null || true
     cp /opt/nexis-installer/firstboot-tui.py  /mnt/usr/local/bin/nexis-firstboot 2>/dev/null || true
     cp /opt/nexis-installer/nexis-shell.py    /mnt/usr/local/bin/nexis-shell     2>/dev/null || true
+    cp /opt/nexis-installer/nexis-update      /mnt/usr/local/bin/nexis-update    2>/dev/null || true
 fi
 chmod +x /mnt/opt/nexis-install.sh /mnt/usr/local/bin/nexis-firstboot \
-          /mnt/usr/local/bin/nexis-shell 2>/dev/null || true
+          /mnt/usr/local/bin/nexis-shell /mnt/usr/local/bin/nexis-update \
+          2>/dev/null || true
 ln -sf /usr/local/bin/nexis-shell /mnt/usr/local/bin/nexis 2>/dev/null || true
 
 cat > /mnt/etc/systemd/system/nexis-install.service << 'SVC'
