@@ -401,6 +401,7 @@ EOF
 
 chroot /mnt grub-install --target=x86_64-efi \
     --efi-directory=/boot/efi --bootloader-id=NeXiS --recheck \
+    --removable \
     >>"$LOG" 2>&1 \
     || { _err "GRUB install failed. Log: $LOG"; exit 1; }
 chroot /mnt update-grub >>"$LOG" 2>&1
