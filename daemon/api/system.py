@@ -117,8 +117,10 @@ async def system_update():
         async def pipeline():
             await queue.put(ev('start', 'Update sequence initiated.'))
 
-            # 1. git pull
+            # 1. git pull (reset local build artefacts first so they never block)
             await queue.put(ev('git', '→ Pulling latest code from origin/main...'))
+            await run('git', 'git', '-C', str(_INSTALL_DIR),
+                      'reset', '--hard', 'HEAD')
             rc = await run('git', 'git', '-C', str(_INSTALL_DIR),
                            'pull', '--ff-only', 'origin', 'main')
             if rc != 0:
