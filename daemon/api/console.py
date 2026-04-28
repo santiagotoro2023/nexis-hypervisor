@@ -76,10 +76,24 @@ async def container_shell(ws: WebSocket, ct_id: str):
 
     master_fd, slave_fd = pty.openpty()
 
+    shell_cmd = (
+        'if [ -x /bin/bash ]; then exec /bin/bash -i -l; '
+        'elif [ -x /usr/bin/bash ]; then exec /usr/bin/bash -i -l; '
+        'else exec /bin/sh -i; fi'
+    )
+    env = {
+        **os.environ,
+        'TERM': 'xterm-256color',
+        'HOME': '/root',
+        'USER': 'root',
+        'LANG': 'en_US.UTF-8',
+        'PS1': r'\[\e[38;5;208m\]\u@\h\[\e[0m\]:\[\e[38;5;33m\]\w\[\e[0m\]\$ ',
+    }
     proc = await asyncio.create_subprocess_exec(
-        'lxc-attach', '-n', ct_id, '--', '/bin/bash',
+        'lxc-attach', '-n', ct_id, '--', '/bin/sh', '-c', shell_cmd,
         stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
         close_fds=True,
+        env=env,
     )
     os.close(slave_fd)
 
@@ -122,5 +136,15 @@ async def container_shell(ws: WebSocket, ct_id: str):
     await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
     for t in [t1, t2]:
         t.cancel()
-    os.close(master_fd)
-    proc.kill()
+    try:
+        os.close(master_fd)
+    except OSError:
+        pass
+    try:
+        proc.terminate()
+        await asyncio.wait_for(proc.wait(), timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass

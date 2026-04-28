@@ -7,14 +7,48 @@ from core import libvirt_manager as lv
 router = APIRouter()
 
 
+from typing import List, Optional
+
+
+class DiskSpec(BaseModel):
+    size_gb: int = 20
+    bus: str = 'virtio'       # virtio | sata | ide | scsi
+    format: str = 'qcow2'     # qcow2 | raw
+
+
+class NicSpec(BaseModel):
+    network: str = 'default'  # 'default' (NAT) or bridge name
+    model: str = 'virtio'     # virtio | e1000 | rtl8139
+
+
 class CreateVM(BaseModel):
     name: str
     vcpus: int = 2
+    sockets: int = 1
+    cores: int = 2
+    threads: int = 1
     memory_mb: int = 2048
+    # Legacy single-disk field kept for compatibility
     disk_gb: int = 20
+    disks: List[DiskSpec] = []
+    nics: List[NicSpec] = []
     os: str = 'linux'
-    os_iso: str | None = None
-    network: str = 'default'
+    os_iso: Optional[str] = None
+    network: str = 'default'  # legacy, first NIC network
+    machine: str = 'q35'
+    cpu_mode: str = 'host-model'
+    display: str = 'vnc'       # vnc | spice
+    video: str = 'qxl'         # qxl | vga | virtio
+    boot_order: List[str] = ['cdrom', 'hd']
+    enable_kvm: bool = True
+    balloon: bool = True
+
+
+class HardwareEditRequest(BaseModel):
+    vcpus: Optional[int] = None
+    memory_mb: Optional[int] = None
+    add_disk: Optional[DiskSpec] = None
+    add_nic: Optional[NicSpec] = None
 
 
 class SnapshotRequest(BaseModel):
@@ -43,7 +77,19 @@ def list_vms():
 @router.post('')
 def create_vm(req: CreateVM):
     try:
-        vm = lv.create_vm(req.name, req.vcpus, req.memory_mb, req.disk_gb, req.os_iso, req.os, req.network)
+        # Merge legacy disk_gb into disks list
+        disks = req.disks if req.disks else [DiskSpec(size_gb=req.disk_gb)]
+        nics = req.nics if req.nics else [NicSpec(network=req.network)]
+        vm = lv.create_vm(
+            name=req.name, vcpus=req.vcpus, sockets=req.sockets,
+            cores=req.cores, threads=req.threads, memory_mb=req.memory_mb,
+            disks=[d.model_dump() for d in disks],
+            nics=[n.model_dump() for n in nics],
+            os_iso=req.os_iso, os=req.os, machine=req.machine,
+            cpu_mode=req.cpu_mode, display=req.display, video=req.video,
+            boot_order=req.boot_order, enable_kvm=req.enable_kvm,
+            balloon=req.balloon,
+        )
         db.log_action('vm.create', req.name)
         return vm
     except Exception as e:
@@ -106,6 +152,58 @@ def force_stop_vm(vm_id: str):
         return {'ok': True}
     except Exception as e:
         raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/suspend')
+def suspend_vm(vm_id: str):
+    try:
+        lv.suspend_vm(vm_id)
+        db.log_action('vm.suspend', vm_id)
+        return {'ok': True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/resume')
+def resume_vm(vm_id: str):
+    try:
+        lv.resume_vm(vm_id)
+        db.log_action('vm.resume', vm_id)
+        return {'ok': True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post('/{vm_id}/reset')
+def reset_vm(vm_id: str):
+    try:
+        lv.reset_vm(vm_id)
+        db.log_action('vm.reset', vm_id)
+        return {'ok': True}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.patch('/{vm_id}/hardware')
+def edit_hardware(vm_id: str, req: HardwareEditRequest):
+    try:
+        result = lv.edit_hardware(vm_id, req.model_dump(exclude_none=True))
+        db.log_action('vm.hardware.edit', vm_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get('/{vm_id}/hardware')
+def get_hardware(vm_id: str):
+    try:
+        return lv.get_hardware(vm_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(503, str(e))
 
 
 @router.post('/{vm_id}/reboot')

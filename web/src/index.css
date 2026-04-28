@@ -42,6 +42,9 @@
   .nx-input {
     @apply bg-nx-bg2 border border-nx-border rounded-xl px-3 py-2 text-sm text-nx-fg placeholder-nx-fg2 focus:outline-none focus:border-nx-orange transition-colors w-full;
   }
+  .nx-label {
+    @apply block text-[10px] text-nx-fg2 mb-1 uppercase tracking-[0.15em];
+  }
   .nx-badge-running {
     @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-nx-green/10 text-nx-green border border-nx-green/20;
   }
