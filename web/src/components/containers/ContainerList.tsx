@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, Play, Square, RotateCcw, Trash2, Terminal, RefreshCw } from 'lucide-react'
+import { Plus, Play, Square, RotateCcw, Trash2, Terminal, RefreshCw, AlertTriangle } from 'lucide-react'
 import { AppLayout } from '../layout/AppLayout'
 import { StatusBadge } from '../common/StatusBadge'
 import { NxSpinner } from '../common/NxSpinner'
@@ -9,20 +9,12 @@ import { Container, CreateContainerPayload } from './types'
 import { CreateContainerForm } from './CreateContainerForm'
 import { useNavigate } from 'react-router-dom'
 
-interface ContextMenu {
-  x: number
-  y: number
-  ct: Container
-}
+interface ContextMenu { x: number; y: number; ct: Container }
+interface DeleteConfirm { ct: Container }
 
 const CREATE_STEPS = [
-  'Resolving template…',
-  'Downloading rootfs…',
-  'Extracting filesystem…',
-  'Configuring container…',
-  'Applying resource limits…',
-  'Setting credentials…',
-  'Finalising…',
+  'Resolving template…', 'Downloading rootfs…', 'Extracting filesystem…',
+  'Configuring container…', 'Applying resource limits…', 'Setting credentials…', 'Finalising…',
 ]
 
 export function ContainerList() {
@@ -33,21 +25,21 @@ export function ContainerList() {
   const [createStep, setCreateStep] = useState(0)
   const [acting, setActing] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm | null>(null)
+  const [deleteInput, setDeleteInput] = useState('')
+  const [deleting, setDeleting] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const stepInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const navigate = useNavigate()
 
   const fetchContainers = useCallback(() =>
-    api.get<Container[]>('/containers').then(setContainers).finally(() => setLoading(false)),
-  [])
+    api.get<Container[]>('/containers').then(setContainers).finally(() => setLoading(false)), [])
 
   useEffect(() => { fetchContainers() }, [fetchContainers])
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setContextMenu(null)
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setContextMenu(null)
     }
     if (contextMenu) {
       document.addEventListener('mousedown', onClickOutside)
@@ -56,43 +48,42 @@ export function ContainerList() {
   }, [contextMenu])
 
   async function action(id: string, op: string) {
-    setContextMenu(null)
-    setActing(id)
+    setContextMenu(null); setActing(id)
     try { await api.post(`/containers/${id}/${op}`) }
     finally { setActing(null); fetchContainers() }
   }
 
-  async function deleteContainer(id: string, name: string) {
+  function promptDelete(ct: Container) {
     setContextMenu(null)
-    if (!confirm(`Delete container "${name}"?`)) return
-    setActing(id)
-    try { await api.delete(`/containers/${id}`) }
-    finally { setActing(null); fetchContainers() }
+    setDeleteInput('')
+    setDeleteConfirm({ ct })
   }
 
-  async function handleCreate(payload: CreateContainerPayload) {
-    setShowCreate(false)
-    setCreating(true)
-    setCreateStep(0)
-
-    stepInterval.current = setInterval(() => {
-      setCreateStep(s => Math.min(s + 1, CREATE_STEPS.length - 1))
-    }, 2200)
-
+  async function confirmDelete() {
+    if (!deleteConfirm) return
+    setDeleting(true)
     try {
-      await api.post('/containers', payload)
+      await api.delete(`/containers/${deleteConfirm.ct.id}`)
+      setDeleteConfirm(null)
     } finally {
-      if (stepInterval.current) clearInterval(stepInterval.current)
-      stepInterval.current = null
-      setCreating(false)
-      setCreateStep(0)
+      setDeleting(false)
       fetchContainers()
     }
   }
 
+  async function handleCreate(payload: CreateContainerPayload) {
+    setShowCreate(false); setCreating(true); setCreateStep(0)
+    stepInterval.current = setInterval(() => setCreateStep(s => Math.min(s + 1, CREATE_STEPS.length - 1)), 2200)
+    try { await api.post('/containers', payload) }
+    finally {
+      if (stepInterval.current) clearInterval(stepInterval.current)
+      stepInterval.current = null
+      setCreating(false); setCreateStep(0); fetchContainers()
+    }
+  }
+
   function openContextMenu(e: React.MouseEvent, ct: Container) {
-    e.preventDefault()
-    e.stopPropagation()
+    e.preventDefault(); e.stopPropagation()
     setContextMenu({ x: e.clientX, y: e.clientY, ct })
   }
 
@@ -109,28 +100,20 @@ export function ContainerList() {
           </p>
           <button className="nx-btn-primary flex items-center gap-2 text-xs tracking-wider"
             onClick={() => setShowCreate(true)}>
-            <Plus size={13} />
-            Create Container
+            <Plus size={13} /> Create Container
           </button>
         </div>
 
-        {/* Creation progress overlay */}
         {creating && (
           <div className="nx-card p-5">
             <div className="flex items-center gap-3 mb-3">
               <NxSpinner size={18} />
-              <span className="text-xs text-nx-orange tracking-widest uppercase font-mono">
-                Provisioning Container
-              </span>
+              <span className="text-xs text-nx-orange tracking-widest uppercase font-mono">Provisioning Container</span>
             </div>
-            <div className="text-xs text-nx-fg2 mb-3 h-4 transition-all">
-              {CREATE_STEPS[createStep]}
-            </div>
+            <div className="text-xs text-nx-fg2 mb-3 h-4">{CREATE_STEPS[createStep]}</div>
             <div className="w-full h-1 bg-nx-dim rounded-full overflow-hidden">
-              <div
-                className="h-full bg-nx-orange rounded-full transition-all duration-700"
-                style={{ width: `${((createStep + 1) / CREATE_STEPS.length) * 100}%` }}
-              />
+              <div className="h-full bg-nx-orange rounded-full transition-all duration-700"
+                style={{ width: `${((createStep + 1) / CREATE_STEPS.length) * 100}%` }} />
             </div>
             <div className="text-[10px] text-nx-fg2 mt-1.5 text-right font-mono">
               {Math.round(((createStep + 1) / CREATE_STEPS.length) * 100)}%
@@ -161,8 +144,7 @@ export function ContainerList() {
               </thead>
               <tbody>
                 {containers.map((ct) => (
-                  <tr
-                    key={ct.id}
+                  <tr key={ct.id}
                     className="border-b border-nx-border/50 hover:bg-nx-dim/30 transition-colors cursor-pointer"
                     onClick={() => navigate(`/containers/${ct.id}`)}
                     onContextMenu={e => openContextMenu(e, ct)}
@@ -178,29 +160,24 @@ export function ContainerList() {
                         {acting === ct.id ? <NxSpinner size={14} /> : (
                           <>
                             {stopped(ct) && (
-                              <button title="Start" className="nx-btn-ghost p-1.5"
-                                onClick={() => action(ct.id, 'start')}>
+                              <button title="Start" className="nx-btn-ghost p-1.5" onClick={() => action(ct.id, 'start')}>
                                 <Play size={13} className="text-nx-green" />
                               </button>
                             )}
                             {running(ct) && (
                               <>
-                                <button title="Stop" className="nx-btn-ghost p-1.5"
-                                  onClick={() => action(ct.id, 'stop')}>
+                                <button title="Stop" className="nx-btn-ghost p-1.5" onClick={() => action(ct.id, 'stop')}>
                                   <Square size={13} className="text-nx-red" />
                                 </button>
-                                <button title="Restart" className="nx-btn-ghost p-1.5"
-                                  onClick={() => action(ct.id, 'restart')}>
+                                <button title="Restart" className="nx-btn-ghost p-1.5" onClick={() => action(ct.id, 'restart')}>
                                   <RotateCcw size={13} />
                                 </button>
-                                <button title="Shell" className="nx-btn-ghost p-1.5"
-                                  onClick={() => navigate(`/containers/${ct.id}/shell`)}>
+                                <button title="Shell" className="nx-btn-ghost p-1.5" onClick={() => navigate(`/containers/${ct.id}/shell`)}>
                                   <Terminal size={13} className="text-nx-orange" />
                                 </button>
                               </>
                             )}
-                            <button title="Delete" className="nx-btn-ghost p-1.5"
-                              onClick={() => deleteContainer(ct.id, ct.name)}>
+                            <button title="Delete" className="nx-btn-ghost p-1.5" onClick={() => promptDelete(ct)}>
                               <Trash2 size={13} className="text-nx-red/70 hover:text-nx-red" />
                             </button>
                           </>
@@ -217,38 +194,71 @@ export function ContainerList() {
 
       {/* Right-click context menu */}
       {contextMenu && (
-        <div
-          ref={menuRef}
-          className="fixed z-50 w-48 bg-nx-surface border border-nx-border rounded-lg shadow-xl py-1 text-xs"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
+        <div ref={menuRef} className="fixed z-50 w-48 bg-nx-surface border border-nx-border rounded-lg shadow-xl py-1 text-xs"
+          style={{ left: contextMenu.x, top: contextMenu.y }}>
           <div className="px-3 py-2 border-b border-nx-border/50">
             <div className="font-mono text-nx-fg font-medium">{contextMenu.ct.name}</div>
             <StatusBadge status={contextMenu.ct.status} />
           </div>
-
           {stopped(contextMenu.ct) && (
-            <CtMenuItem icon={<Play size={12} className="text-nx-green" />} label="Start"
+            <CtxItem icon={<Play size={12} className="text-nx-green" />} label="Start"
               onClick={() => action(contextMenu.ct.id, 'start')} />
           )}
           {running(contextMenu.ct) && <>
-            <CtMenuItem icon={<Square size={12} className="text-nx-red" />} label="Stop"
+            <CtxItem icon={<Square size={12} className="text-nx-red" />} label="Stop"
               onClick={() => action(contextMenu.ct.id, 'stop')} />
-            <CtMenuItem icon={<RotateCcw size={12} />} label="Restart"
+            <CtxItem icon={<RotateCcw size={12} />} label="Restart"
               onClick={() => action(contextMenu.ct.id, 'restart')} />
-            <CtMenuItem icon={<Terminal size={12} className="text-nx-orange" />} label="Open Shell"
+            <CtxItem icon={<Terminal size={12} className="text-nx-orange" />} label="Open Shell"
               onClick={() => { setContextMenu(null); navigate(`/containers/${contextMenu.ct.id}/shell`) }} />
           </>}
           {paused(contextMenu.ct) && (
-            <CtMenuItem icon={<RefreshCw size={12} className="text-nx-orange" />} label="Unfreeze"
+            <CtxItem icon={<RefreshCw size={12} className="text-nx-orange" />} label="Unfreeze"
               onClick={() => action(contextMenu.ct.id, 'restart')} />
           )}
-
           <div className="border-t border-nx-border/30 mt-1 pt-1" />
-          <CtMenuItem icon={<Trash2 size={12} className="text-nx-red" />} label="Delete"
+          <CtxItem icon={<Trash2 size={12} className="text-nx-red" />} label="Delete"
             className="text-nx-red hover:bg-nx-red/10"
-            onClick={() => deleteContainer(contextMenu.ct.id, contextMenu.ct.name)} />
+            onClick={() => promptDelete(contextMenu.ct)} />
         </div>
+      )}
+
+      {/* In-UI delete confirmation */}
+      {deleteConfirm && (
+        <NxModal title="Delete Container" onClose={() => setDeleteConfirm(null)} width="max-w-sm">
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-nx-red/5 border border-nx-red/20">
+              <AlertTriangle size={16} className="text-nx-red shrink-0 mt-0.5" />
+              <div className="text-xs text-nx-fg2">
+                This will permanently destroy container <span className="text-nx-fg font-mono font-medium">{deleteConfirm.ct.name}</span> and all its data. This cannot be undone.
+              </div>
+            </div>
+            <div>
+              <label className="nx-label">
+                Type <span className="text-nx-fg font-mono">{deleteConfirm.ct.name}</span> to confirm
+              </label>
+              <input
+                className="nx-input"
+                value={deleteInput}
+                onChange={e => setDeleteInput(e.target.value)}
+                placeholder={deleteConfirm.ct.name}
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter' && deleteInput === deleteConfirm.ct.name) confirmDelete() }}
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button className="nx-btn-ghost" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button
+                className="nx-btn-danger flex items-center gap-2"
+                disabled={deleteInput !== deleteConfirm.ct.name || deleting}
+                onClick={confirmDelete}
+              >
+                {deleting && <NxSpinner size={13} />}
+                <Trash2 size={13} /> Delete
+              </button>
+            </div>
+          </div>
+        </NxModal>
       )}
 
       {showCreate && (
@@ -260,21 +270,13 @@ export function ContainerList() {
   )
 }
 
-function CtMenuItem({
-  icon, label, onClick, className = '',
-}: {
-  icon: React.ReactNode
-  label: string
-  onClick: () => void
-  className?: string
+function CtxItem({ icon, label, onClick, className = '' }: {
+  icon: React.ReactNode; label: string; onClick: () => void; className?: string
 }) {
   return (
-    <button
-      className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-nx-fg2 hover:bg-nx-dim hover:text-nx-fg transition-colors ${className}`}
-      onClick={onClick}
-    >
-      {icon}
-      <span className="tracking-wide">{label}</span>
+    <button className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-nx-fg2 hover:bg-nx-dim hover:text-nx-fg transition-colors ${className}`}
+      onClick={onClick}>
+      {icon}<span className="tracking-wide">{label}</span>
     </button>
   )
 }

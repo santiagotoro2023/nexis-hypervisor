@@ -23,10 +23,11 @@ export function Login({ onLogin, error, loading }: Props) {
 
       <div className="w-full max-w-sm relative">
         <div className="text-center mb-10">
-          <svg viewBox="0 0 48 48" fill="none" className="w-10 h-10 mx-auto mb-5">
-            <path d="M6 6h10l8 16 8-16h10L24 42 6 6z" fill="#F87200"/>
-            <circle cx="24" cy="28" r="5" fill="#F87200" opacity="0.7"/>
-            <circle cx="24" cy="28" r="2.5" fill="#080807"/>
+          <svg viewBox="0 0 56 56" fill="none" className="w-14 h-14 mx-auto mb-5">
+            <path d="M28 5 L53 49 L3 49 Z" stroke="#F87200" strokeWidth="2" strokeLinejoin="round"/>
+            <ellipse cx="28" cy="36" rx="9" ry="5.5" stroke="#F87200" strokeWidth="1.5" fill="none"/>
+            <circle cx="28" cy="36" r="3" fill="#F87200"/>
+            <circle cx="28" cy="36" r="1.3" fill="#080807"/>
           </svg>
           <div className="text-lg font-semibold text-nx-fg tracking-[0.4em] uppercase">NeXiS</div>
           <div className="text-nx-fg2 text-[10px] tracking-[0.5em] uppercase mt-1">Hypervisor Control System</div>

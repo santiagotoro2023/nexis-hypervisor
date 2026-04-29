@@ -2,6 +2,7 @@
 WebSocket proxies:
   - VMs: WebSocket → TCP → local VNC port (noVNC-compatible)
   - Containers: WebSocket ↔ lxc-attach PTY (xterm.js-compatible)
+  - Nodes: WebSocket ↔ SSH PTY via asyncssh (xterm.js-compatible)
 """
 import asyncio
 import os
@@ -9,6 +10,8 @@ import pty
 import struct
 import fcntl
 import termios
+import json
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -146,5 +149,118 @@ async def container_shell(ws: WebSocket, ct_id: str):
     except Exception:
         try:
             proc.kill()
+        except Exception:
+            pass
+
+
+@router.websocket('/nodes/{node_id}/shell')
+async def node_shell(ws: WebSocket, node_id: str):
+    await ws.accept()
+
+    try:
+        import db
+        row = db.conn().execute(
+            'SELECT url FROM cluster_nodes WHERE node_id=?', (node_id,)
+        ).fetchone()
+        if not row:
+            await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m Node not found\r\n')
+            await ws.close(code=1011)
+            return
+        host = urlparse(row['url']).hostname or ''
+    except Exception as e:
+        await ws.send_text(f'\r\n\x1b[1;31m[nexis]\x1b[0m DB error: {e}\r\n')
+        await ws.close(code=1011)
+        return
+
+    # First message must be JSON credentials
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=20)
+        creds = json.loads(raw)
+        user = creds.get('user', 'root')
+        password = creds.get('password', '')
+        port = int(creds.get('port', 22))
+        cols = int(creds.get('cols', 220))
+        rows_t = int(creds.get('rows', 50))
+    except Exception as e:
+        await ws.send_text(f'\r\n\x1b[1;31m[nexis]\x1b[0m Bad credentials message: {e}\r\n')
+        await ws.close(code=1011)
+        return
+
+    try:
+        import asyncssh
+    except ImportError:
+        await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m asyncssh not installed — run pip install asyncssh\r\n')
+        await ws.close(code=1011)
+        return
+
+    connect_kwargs: dict = {
+        'host': host,
+        'port': port,
+        'username': user,
+        'known_hosts': None,
+        'connect_timeout': 10,
+    }
+    if password:
+        connect_kwargs['password'] = password
+    else:
+        connect_kwargs['client_keys'] = ['/root/.ssh/id_rsa', '/root/.ssh/id_ed25519']
+
+    try:
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            async with conn.create_process(
+                term_type='xterm-256color',
+                term_size=(cols, rows_t),
+            ) as proc:
+                await ws.send_text(
+                    f'\x1b[1;33m[nexis]\x1b[0m Connected to {user}@{host}:{port}\r\n'
+                )
+
+                async def ssh_to_ws():
+                    try:
+                        async for data in proc.stdout:
+                            await ws.send_bytes(data.encode() if isinstance(data, str) else data)
+                    except Exception:
+                        pass
+
+                async def ws_to_ssh():
+                    try:
+                        while True:
+                            msg = await ws.receive()
+                            if 'bytes' in msg:
+                                proc.stdin.write(msg['bytes'].decode(errors='replace'))
+                            elif 'text' in msg:
+                                try:
+                                    cmd = json.loads(msg['text'])
+                                    if cmd.get('type') == 'resize':
+                                        proc.change_terminal_size(
+                                            int(cmd.get('cols', 220)),
+                                            int(cmd.get('rows', 50)),
+                                        )
+                                except Exception:
+                                    proc.stdin.write(msg['text'])
+                    except (WebSocketDisconnect, Exception):
+                        pass
+
+                t1 = asyncio.create_task(ssh_to_ws())
+                t2 = asyncio.create_task(ws_to_ssh())
+                await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+                for t in [t1, t2]:
+                    t.cancel()
+    except asyncssh.PermissionDenied:
+        try:
+            await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m Permission denied — wrong credentials\r\n')
+            await ws.close()
+        except Exception:
+            pass
+    except asyncssh.ConnectionLost:
+        try:
+            await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m Connection lost\r\n')
+            await ws.close()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await ws.send_text(f'\r\n\x1b[1;31m[nexis]\x1b[0m SSH error: {e}\r\n')
+            await ws.close()
         except Exception:
             pass

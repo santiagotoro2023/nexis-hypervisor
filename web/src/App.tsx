@@ -8,6 +8,7 @@ import { VMDetail } from './components/vms/VMDetail'
 import { VMConsole } from './components/console/VMConsole'
 import { ContainerList } from './components/containers/ContainerList'
 import { ContainerShell } from './components/console/ContainerShell'
+import { NodeShell } from './components/console/NodeShell'
 import { Storage } from './components/storage/Storage'
 import { Network } from './components/network/Network'
 import { NexisController } from './components/nexis/NexisController'
@@ -45,6 +46,7 @@ function AppRoutes() {
       <Route path="/vms/:id/console" element={<VMConsole />} />
       <Route path="/containers" element={<ContainerList />} />
       <Route path="/containers/:id/shell" element={<ContainerShell />} />
+      <Route path="/nodes/:nodeId/shell" element={<NodeShell />} />
       <Route path="/storage" element={<Storage />} />
       <Route path="/network" element={<Network />} />
       <Route path="/nexis" element={<NexisController />} />
