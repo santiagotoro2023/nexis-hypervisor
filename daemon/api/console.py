@@ -110,22 +110,24 @@ async def container_shell(ws: WebSocket, ct_id: str):
             pass
 
     async def ws_to_pty():
+        import json as _json
         try:
             while True:
                 msg = await ws.receive()
-                if 'bytes' in msg:
-                    os.write(master_fd, msg['bytes'])
-                elif 'text' in msg:
-                    import json
+                raw = msg.get('bytes')
+                txt = msg.get('text')
+                if raw is not None:
+                    os.write(master_fd, raw)
+                elif txt is not None:
                     try:
-                        cmd = json.loads(msg['text'])
+                        cmd = _json.loads(txt)
                         if cmd.get('type') == 'resize':
                             cols = cmd.get('cols', 80)
                             rows = cmd.get('rows', 24)
                             size = struct.pack('HHHH', rows, cols, 0, 0)
                             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, size)
-                    except Exception:
-                        os.write(master_fd, msg['text'].encode())
+                    except (_json.JSONDecodeError, KeyError):
+                        os.write(master_fd, txt.encode())
         except WebSocketDisconnect:
             pass
         except Exception:

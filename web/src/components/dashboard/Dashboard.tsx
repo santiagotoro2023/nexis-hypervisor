@@ -63,7 +63,7 @@ export function Dashboard() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             icon={Server}
-            label="Virtual Instances"
+            label="Virtual Machines"
             value={m.vm_count}
             sub={`${m.vm_running} active`}
             color="text-nx-orange"

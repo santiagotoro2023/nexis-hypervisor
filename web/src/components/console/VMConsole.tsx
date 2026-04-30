@@ -162,7 +162,7 @@ export function VMConsole() {
               className="nx-btn-primary text-xs tracking-wider"
               onClick={() => { sendClipboard(); setShowClip(false) }}
             >
-              Send to Instance
+              Send to VM
             </button>
           </div>
         </div>

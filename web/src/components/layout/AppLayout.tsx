@@ -4,7 +4,7 @@ import { Header } from './Header'
 
 export function AppLayout({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex h-screen bg-nx-bg overflow-hidden">
+    <div className="flex h-screen bg-nx-bg overflow-hidden" onContextMenu={e => e.preventDefault()}>
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header title={title} />

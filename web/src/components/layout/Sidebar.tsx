@@ -9,7 +9,7 @@ import { api } from '../../api/client'
 
 const NAV = [
   { to: '/',           icon: LayoutDashboard, label: 'SYSTEM OVERVIEW' },
-  { to: '/vms',        icon: Server,          label: 'VIRTUAL INSTANCES' },
+  { to: '/vms',        icon: Server,          label: 'VIRTUAL MACHINES' },
   { to: '/containers', icon: Box,             label: 'CONTAINERS' },
   { to: '/storage',    icon: HardDrive,       label: 'STORAGE' },
   { to: '/network',    icon: Network,         label: 'NETWORK' },
@@ -30,11 +30,11 @@ export function Sidebar() {
   return (
     <aside className="w-56 shrink-0 flex flex-col bg-nx-bg2 border-r border-nx-border h-screen sticky top-0">
       <div className="flex items-center gap-2.5 px-5 py-5 border-b border-nx-border">
-        <div className="w-7 h-7 flex items-center justify-center">
-          <svg viewBox="0 0 28 28" fill="none" className="w-7 h-7">
-            <path d="M14 3 L26 23 L2 23 Z" stroke="#F87200" strokeWidth="1.5" strokeLinejoin="round"/>
-            <ellipse cx="14" cy="17" rx="4.5" ry="2.8" stroke="#F87200" strokeWidth="1" fill="none"/>
-            <circle cx="14" cy="17" r="1.4" fill="#F87200"/>
+        <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+          <svg viewBox="0 0 32 32" fill="none" className="w-8 h-8">
+            <path d="M16 3 L29.5 26.5 L2.5 26.5 Z" stroke="#F87200" strokeWidth="1.5" strokeLinejoin="round" fill="rgba(248,114,0,0.07)"/>
+            <ellipse cx="16" cy="19.5" rx="5.2" ry="3.1" stroke="#F87200" strokeWidth="1" fill="none"/>
+            <circle cx="16" cy="19.5" r="1.7" fill="#F87200"/>
           </svg>
         </div>
         <div>

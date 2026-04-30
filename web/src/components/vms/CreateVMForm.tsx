@@ -133,7 +133,7 @@ export function CreateVMForm({ onSubmit, onCancel }: Props) {
         {tab === 'General' && (
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <label className="nx-label">Instance Name</label>
+              <label className="nx-label">VM Name</label>
               <input className="nx-input" placeholder="my-vm" value={name} onChange={e => setName(e.target.value)} autoFocus />
             </div>
             <div>
@@ -400,7 +400,7 @@ export function CreateVMForm({ onSubmit, onCancel }: Props) {
           <button type="button" className="nx-btn-ghost" onClick={onCancel}>Cancel</button>
           <button type="submit" className="nx-btn-primary flex items-center gap-2" disabled={loading}>
             {loading && <NxSpinner size={14} />}
-            Provision
+            Create VM
           </button>
         </div>
       </div>
