@@ -27,14 +27,19 @@ Per-node compute management for the NeXiS ecosystem. Provides a web interface an
 ## Capabilities
 
 **Virtual Machines (KVM/QEMU)**
-- Provision, start, stop, reboot, force-stop, delete
+- Create, start, shutdown (graceful), stop (force), restart, remove
+- Multi-select with bulk start / shutdown / remove
 - VNC console with clipboard sync (paste from host)
 - Snapshots — create, restore, delete
 - Clone VM · Convert to template · Backup disk · Live migrate
+- Faulted / crashed VMs can be restarted from the UI
+- Right-click context menu per VM; Proxmox/ESXi-consistent terminology throughout
 
 **Containers (LXC)**
-- Create, start, stop, delete LXC containers
-- Browser-attached shell
+- Create, start, stop, remove LXC containers
+- Multi-select with bulk start / stop / remove
+- Interactive browser shell (WebSocket PTY)
+- Right-click context menu per container
 
 **Cluster**
 - Multi-node clustering — unified VM/container view across all nodes
@@ -83,8 +88,6 @@ The installer handles: packages, libvirt, QEMU, LXC, Python venv, web UI build, 
 3. Complete the setup wizard — enter your NeXiS Controller URL, username, and password
 4. The node registers itself with the Controller and SSO is activated
 
-> **Emergency access**: if the Controller is unreachable, `creator` / `Asdf1234!` provides local fallback.
-
 ---
 
 ## Cluster Setup
@@ -112,7 +115,11 @@ All endpoints require `Authorization: Bearer <token>`.
 | `POST /api/auth/login` | Authenticate via Controller SSO or local fallback |
 | `GET /api/vms` | List local VMs |
 | `POST /api/vms` | Create VM |
-| `POST /api/vms/{id}/start\|stop\|reboot` | Power operations |
+| `POST /api/vms/{id}/start` | Start VM |
+| `POST /api/vms/{id}/shutdown` | Graceful shutdown |
+| `POST /api/vms/{id}/stop` | Force stop |
+| `POST /api/vms/{id}/restart` | Restart VM |
+| `DELETE /api/vms/{id}` | Remove VM |
 | `POST /api/vms/{id}/clone` | Clone VM |
 | `POST /api/vms/{id}/backup` | Backup VM disk |
 | `POST /api/vms/{id}/migrate` | Live migrate |
@@ -120,6 +127,11 @@ All endpoints require `Authorization: Bearer <token>`.
 | `GET /api/vms/{id}/snapshots` | List snapshots |
 | `POST /api/vms/{id}/snapshots` | Create snapshot |
 | `GET /api/containers` | List LXC containers |
+| `POST /api/containers` | Create container |
+| `POST /api/containers/{id}/start` | Start container |
+| `POST /api/containers/{id}/stop` | Stop container |
+| `DELETE /api/containers/{id}` | Remove container |
+| `WS /api/containers/{id}/shell` | Interactive shell (WebSocket PTY) |
 | `GET /api/storage/pools` | List storage pools |
 | `POST /api/storage/pools` | Add pool (local/NFS) |
 | `GET /api/storage/catalog` | ISO catalog |
@@ -140,6 +152,7 @@ All endpoints require `Authorization: Bearer <token>`.
 | Daemon | Python 3.11 · FastAPI · uvicorn |
 | Virtualisation | libvirt · QEMU/KVM · LXC |
 | Console | noVNC (WebSocket VNC proxy) |
+| Shell | WebSocket PTY (`pty` + `fcntl`) |
 | Auth | Controller SSO · Bearer token · local emergency fallback |
 | Realtime | Server-Sent Events |
 | Web UI | React 18 · TypeScript · Vite · Tailwind CSS |
