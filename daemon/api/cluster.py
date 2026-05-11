@@ -1,6 +1,8 @@
 """
 NeXiS Hypervisor — Cluster Management
 Multi-node clustering: nodes register, heartbeat, and aggregate state.
+When connected to a NeXiS Controller, peer hypervisors are auto-discovered
+from the controller's /api/hyp/nodes registry.
 """
 import json
 import ssl
@@ -17,7 +19,7 @@ import db
 router = APIRouter()
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Models ─────────────────────────────────────────────────────────────────────────
 
 class JoinRequest(BaseModel):
     name: str
@@ -31,7 +33,12 @@ class HeartbeatRequest(BaseModel):
     status: dict
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+class MigrateRequest(BaseModel):
+    vm_id: str
+    target_uri: str
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────────────
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -72,7 +79,61 @@ def _get_node(node_id: str) -> dict:
     return dict(row)
 
 
-# ── Node management ───────────────────────────────────────────────────────────
+def _get_controller_peers() -> list[dict]:
+    """
+    Fetch the list of all hypervisor nodes registered with the same
+    NeXiS Controller this node is paired to.
+    Returns a list of peer dicts with at least {url, name, api_token}.
+    Excludes this node itself (matched by our own registered URL).
+    """
+    import socket
+    import config as cfg
+
+    pairing = db.conn().execute(
+        'SELECT controller_url, controller_token, controller_api_token FROM nexis_pairing WHERE id=1'
+    ).fetchone()
+    if not pairing:
+        return []
+
+    controller_url = pairing['controller_url']
+    ctrl_token = pairing['controller_token']
+
+    # Determine our own URL so we can exclude ourselves from the peer list
+    own_hostname = cfg.get('hostname', socket.gethostname())
+    own_url = f'https://{own_hostname}:{cfg.PORT}'
+
+    try:
+        nodes_data = _proxy_get(f'{controller_url}/api/hyp/nodes', ctrl_token)
+    except Exception:
+        return []
+
+    peers = []
+    # The controller may return a list directly or a dict with a 'nodes' key
+    if isinstance(nodes_data, list):
+        node_list = nodes_data
+    elif isinstance(nodes_data, dict):
+        node_list = nodes_data.get('nodes', nodes_data.get('items', []))
+    else:
+        return []
+
+    for node in node_list:
+        node_url = (node.get('url') or '').rstrip('/')
+        if not node_url:
+            continue
+        # Skip ourselves
+        if node_url.rstrip('/') == own_url.rstrip('/'):
+            continue
+        peers.append({
+            'name': node.get('name', node_url),
+            'url': node_url,
+            'api_token': node.get('api_token', pairing['controller_api_token'] or ''),
+            'node_id': node.get('id') or node.get('node_id') or node_url,
+        })
+
+    return peers
+
+
+# ── Node management ─────────────────────────────────────────────────────
 
 @router.get('/nodes')
 def list_nodes():
@@ -114,11 +175,45 @@ def heartbeat(req: HeartbeatRequest):
     return {'ok': True}
 
 
-# ── Cluster-wide aggregate views ──────────────────────────────────────────────
+# ── Peers (auto-discovered from Controller) ────────────────────────────────
+
+@router.get('/peers')
+def get_peers():
+    """
+    Return all other hypervisor nodes registered with the same NeXiS Controller.
+    This enables automatic cluster formation without manual node registration.
+    """
+    peers = _get_controller_peers()
+    return {'peers': peers, 'count': len(peers)}
+
+
+# ── Live VM Migration ─────────────────────────────────────────────────────
+
+@router.post('/migrate')
+def migrate_vm_endpoint(req: MigrateRequest):
+    """
+    Live-migrate a VM to another hypervisor.
+    Uses virsh migrate with --live --persistent --undefinesource flags.
+    The target_uri should be a libvirt connection URI, e.g.:
+      qemu+ssh://root@192.168.1.x/system
+      qemu+tls://192.168.1.x/system
+    """
+    from core.libvirt_manager import migrate_vm
+    try:
+        result = migrate_vm(req.vm_id, req.target_uri)
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    db.log_action('cluster.migrate', req.vm_id, source=req.target_uri)
+    return result
+
+
+# ── Cluster-wide aggregate views ─────────────────────────────────────────────
 
 @router.get('/vms')
 def cluster_vms():
-    """All VMs across every node — local + remote."""
+    """All VMs across every node — local + registered cluster nodes + controller peers."""
     import socket
     local_name = db.conn().execute("SELECT value FROM config WHERE key='hostname'").fetchone()
     local_hostname = local_name['value'] if local_name else socket.gethostname()
@@ -132,7 +227,7 @@ def cluster_vms():
     except Exception:
         pass
 
-    # Remote nodes
+    # Manually registered cluster nodes
     nodes = db.conn().execute(
         'SELECT node_id, name, url, api_token FROM cluster_nodes'
     ).fetchall()
@@ -142,6 +237,20 @@ def cluster_vms():
             if isinstance(vms, list):
                 for vm in vms:
                     result.append({**vm, 'node_id': node['node_id'], 'node_name': node['name']})
+        except Exception:
+            pass
+
+    # Controller-discovered peer hypervisors (auto-clustering)
+    seen_urls = {node['url'].rstrip('/') for node in nodes}
+    for peer in _get_controller_peers():
+        peer_url = peer['url'].rstrip('/')
+        if peer_url in seen_urls:
+            continue  # already counted above
+        try:
+            vms = _proxy_get(f'{peer_url}/api/vms', peer['api_token'] or '')
+            if isinstance(vms, list):
+                for vm in vms:
+                    result.append({**vm, 'node_id': peer['node_id'], 'node_name': peer['name']})
         except Exception:
             pass
 
@@ -208,7 +317,7 @@ def cluster_isos():
     return result
 
 
-# ── Per-node proxy routes ─────────────────────────────────────────────────────
+# ── Per-node proxy routes ────────────────────────────────────────────────────────
 
 @router.get('/nodes/{node_id}/vms')
 def node_vms(node_id: str):
@@ -251,4 +360,10 @@ def cluster_summary():
     nodes = db.conn().execute(
         'SELECT node_id, name, url, role, last_seen FROM cluster_nodes'
     ).fetchall()
-    return {'node_count': len(nodes), 'nodes': [dict(n) for n in nodes]}
+    peers = _get_controller_peers()
+    return {
+        'node_count': len(nodes),
+        'peer_count': len(peers),
+        'nodes': [dict(n) for n in nodes],
+        'peers': peers,
+    }

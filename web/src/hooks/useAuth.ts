@@ -6,11 +6,15 @@ export function useAuth() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function login(username: string, password: string) {
+  async function login(controllerUrl: string, username: string, password: string) {
     setLoading(true)
     setError(null)
     try {
-      const { token } = await api.post<{ token: string }>('/auth/login', { username, password })
+      const { token } = await api.post<{ token: string }>('/auth/login-via-controller', {
+        controller_url: controllerUrl,
+        username,
+        password,
+      })
       setToken(token)
       setAuthed(true)
     } catch (e) {

@@ -465,7 +465,7 @@ def delete_snapshot(vm_id: str, snap_name: str):
     dom.snapshotLookupByName(snap_name).delete()
 
 
-# ── Clone ────────────────────────────────────────────────────────────────────────────────────
+# ── Clone ──────────────────────────────────────────────────────────────────────────────────────────
 
 def clone_vm(vm_id: str, new_name: str) -> dict:
     dom = _find(vm_id)
@@ -503,7 +503,7 @@ def clone_vm(vm_id: str, new_name: str) -> dict:
     return _domain_info(_conn().defineXML(xml_str))
 
 
-# ── Backup ───────────────────────────────────────────────────────────────────────────────────────
+# ── Backup ───────────────────────────────────────────────────────────────────────────────────────────────
 
 _BACKUP_DIR = '/var/lib/nexis/backups'
 
@@ -552,25 +552,26 @@ def list_backups() -> list[dict]:
     return result
 
 
-# ── Migrate ────────────────────────────────────────────────────────────────────────────────────
+# ── Migrate ────────────────────────────────────────────────────────────────────────────────────────
 
-def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
-    if not _LIBVIRT:
-        raise RuntimeError('libvirt-python not installed')
-    dom = _find(vm_id)
-    flags = 0
-    if live:
-        flags |= getattr(libvirt, 'VIR_MIGRATE_LIVE', 1)
-    flags |= getattr(libvirt, 'VIR_MIGRATE_PERSIST_DEST', 8)
-    flags |= getattr(libvirt, 'VIR_MIGRATE_UNDEFINE_SOURCE', 16)
-    dest_conn = libvirt.open(target_uri)
-    try:
-        dom.migrate(dest_conn, flags, None, None, 0)
-    finally:
-        dest_conn.close()
+def migrate_vm(vm_id: str, target_uri: str) -> dict:
+    """
+    Live-migrate a VM to another hypervisor using virsh.
+    target_uri is a libvirt connection URI, e.g.:
+      qemu+ssh://root@192.168.1.x/system
+      qemu+tls://192.168.1.x/system
+    """
+    result = subprocess.run(
+        ['virsh', 'migrate', '--live', '--persistent', '--undefinesource',
+         vm_id, target_uri],
+        capture_output=True, text=True, timeout=300
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+    return {'ok': True, 'migrated_to': target_uri}
 
 
-# ── Templates ───────────────────────────────────────────────────────────────────────────────────────
+# ── Templates ─────────────────────────────────────────────────────────────────────────────────────────────
 
 def set_template_flag(vm_id: str, is_template: bool) -> None:
     import db

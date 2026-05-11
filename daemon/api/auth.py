@@ -23,7 +23,7 @@ router = APIRouter()
 _SESSION_TTL_DAYS = 90
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
 
 def _hash(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -60,6 +60,38 @@ def _ctrl_login(controller_url: str, username: str, password: str) -> str:
             if not token:
                 raise HTTPException(401, 'Controller did not return a token.')
             return token
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise HTTPException(401, f'Controller rejected credentials: {body[:120]}')
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f'Cannot reach controller at {controller_url}: {e}')
+
+
+def _ctrl_login_with_role(controller_url: str, username: str, password: str) -> tuple[str, str]:
+    """
+    Authenticate against the Controller.
+    Returns (ctrl_token, role) where role is 'admin' or 'user'.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    payload = json.dumps({'username': username, 'password': password}).encode()
+    req = urllib.request.Request(
+        f'{controller_url}/api/auth/login',
+        data=payload,
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
+            data = json.loads(resp.read())
+            token = data.get('token') or data.get('access_token')
+            if not token:
+                raise HTTPException(401, 'Controller did not return a token.')
+            role = data.get('role', 'user')
+            return token, role
     except urllib.error.HTTPError as e:
         body = e.read().decode()
         raise HTTPException(401, f'Controller rejected credentials: {body[:120]}')
@@ -127,9 +159,15 @@ def _local_check(username: str, password: str) -> bool:
     return secrets.compare_digest(_hash(password), row['hash'])
 
 
-# ── Models ────────────────────────────────────────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginViaControllerRequest(BaseModel):
+    controller_url: str
     username: str
     password: str
 
@@ -140,7 +178,7 @@ class SetupRequest(BaseModel):
     password: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────────────────────
 
 @router.get('/status')
 def status():
@@ -220,6 +258,46 @@ def login(req: LoginRequest):
         return {'token': token, 'username': username, 'role': row['role'] if row else 'user'}
 
     raise HTTPException(401, 'Invalid username or password.')
+
+
+@router.post('/login-via-controller')
+def login_via_controller(req: LoginViaControllerRequest):
+    """
+    SSO login using a specific NeXiS Controller URL.
+    Authenticates against the given controller, creates a local session,
+    and returns the session token along with the user's role.
+
+    This endpoint is used by the login page when the node is already set up
+    and the user wants to authenticate through their controller.
+    """
+    controller_url = req.controller_url.strip().rstrip('/')
+    username = req.username.strip()
+
+    if not controller_url:
+        raise HTTPException(400, 'Controller URL is required.')
+    if not username:
+        raise HTTPException(400, 'Username is required.')
+    if not req.password:
+        raise HTTPException(400, 'Password is required.')
+
+    # Authenticate against the specified controller and retrieve role
+    try:
+        ctrl_token, role = _ctrl_login_with_role(controller_url, username, req.password)
+    except HTTPException:
+        raise
+
+    # Store the controller token against the pairing row (update if paired)
+    paired = db.conn().execute('SELECT id FROM nexis_pairing WHERE id=1').fetchone()
+    if paired:
+        db.conn().execute(
+            'UPDATE nexis_pairing SET controller_token=?, last_ping=? WHERE id=1',
+            (ctrl_token, datetime.now(timezone.utc).isoformat()),
+        )
+        db.conn().commit()
+
+    token = _create_session(username)
+    db.log_action('login', f'{username} via login-via-controller ({controller_url})')
+    return {'token': token, 'username': username, 'role': role}
 
 
 @router.post('/logout')

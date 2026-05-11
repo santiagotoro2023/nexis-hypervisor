@@ -2,18 +2,19 @@ import { useState } from 'react'
 import { NxSpinner } from '../common/NxSpinner'
 
 interface Props {
-  onLogin: (username: string, password: string) => Promise<void>
+  onLogin: (controllerUrl: string, username: string, password: string) => Promise<void>
   error: string | null
   loading: boolean
 }
 
 export function Login({ onLogin, error, loading }: Props) {
+  const [controllerUrl, setControllerUrl] = useState('')
   const [username, setUsername] = useState('')
   const [pw, setPw] = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    await onLogin(username, pw)
+    await onLogin(controllerUrl, username, pw)
   }
 
   return (
@@ -35,18 +36,31 @@ export function Login({ onLogin, error, loading }: Props) {
 
         <div className="nx-card p-6 space-y-5">
           <div className="text-center">
-            <div className="text-[10px] text-nx-fg2 tracking-[0.3em] uppercase">Identity Verification Required</div>
+            <div className="text-[10px] text-nx-fg2 tracking-[0.3em] uppercase">Log in with NeXiS Controller</div>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Controller URL</label>
+              <input
+                type="url"
+                className="nx-input font-mono"
+                placeholder="https://192.168.1.x:8443"
+                value={controllerUrl}
+                onChange={e => setControllerUrl(e.target.value)}
+                autoFocus
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
             <div>
               <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Username</label>
               <input
                 type="text"
                 className="nx-input"
-                placeholder="creator"
+                placeholder="your-username"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
-                autoFocus
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -72,7 +86,7 @@ export function Login({ onLogin, error, loading }: Props) {
             <button
               type="submit"
               className="nx-btn-primary w-full flex items-center justify-center gap-2 tracking-[0.2em] text-xs uppercase"
-              disabled={loading || !username.trim() || !pw.trim()}
+              disabled={loading || !controllerUrl.trim() || !username.trim() || !pw.trim()}
             >
               {loading && <NxSpinner size={14} />}
               {loading ? 'Verifying...' : 'Authenticate'}
@@ -81,7 +95,7 @@ export function Login({ onLogin, error, loading }: Props) {
         </div>
 
         <div className="text-center text-nx-fg2 text-[10px] mt-6 font-mono tracking-widest uppercase">
-          Authorised Personnel Only · Local Access
+          Authorised Personnel Only · NeXiS Controller SSO
         </div>
       </div>
     </div>
