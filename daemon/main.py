@@ -27,7 +27,7 @@ app = FastAPI(title='NeXiS Hypervisor', version='1.0.0', docs_url='/api/docs', r
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
-    allow_credentials=True,
+    allow_credentials=False,  # Bearer tokens don't use cookies; True + '*' is invalid per CORS spec
     allow_methods=['*'],
     allow_headers=['*'],
 )
@@ -37,7 +37,7 @@ app.add_middleware(
 async def auth_middleware(request: Request, call_next):
     public_paths = {
         '/api/auth/login', '/api/auth/setup', '/api/auth/status',
-        '/api/auth/setup/complete', '/api/metrics/stream',
+        '/api/auth/setup/complete',
     }
     path = request.url.path
 
@@ -64,8 +64,17 @@ async def auth_middleware(request: Request, call_next):
 
 
 def _valid_token(token: str) -> bool:
-    row = db.conn().execute('SELECT 1 FROM sessions WHERE token = ?', (token,)).fetchone()
-    return row is not None
+    row = db.conn().execute(
+        'SELECT expires_at FROM sessions WHERE token = ?', (token,)
+    ).fetchone()
+    if not row:
+        return False
+    expires_at = row['expires_at']
+    if expires_at and expires_at < datetime.now(timezone.utc).isoformat():
+        db.conn().execute('DELETE FROM sessions WHERE token = ?', (token,))
+        db.conn().commit()
+        return False
+    return True
 
 
 # Mount API routers

@@ -19,7 +19,8 @@ def init():
         CREATE TABLE IF NOT EXISTS sessions (
             token       TEXT PRIMARY KEY,
             username    TEXT NOT NULL DEFAULT 'creator',
-            created_at  TEXT NOT NULL
+            created_at  TEXT NOT NULL,
+            expires_at  TEXT
         );
 
         CREATE TABLE IF NOT EXISTS local_users (
@@ -78,6 +79,13 @@ def init():
             value TEXT NOT NULL
         );
     """)
+
+    # Migrate: add expires_at to existing sessions tables that predate this column
+    existing_cols = {row[1] for row in c.execute('PRAGMA table_info(sessions)')}
+    if 'expires_at' not in existing_cols:
+        c.execute('ALTER TABLE sessions ADD COLUMN expires_at TEXT')
+        c.commit()
+
     # Seed default local user if absent
     import hashlib
     existing = c.execute('SELECT 1 FROM local_users WHERE username=?', ('creator',)).fetchone()

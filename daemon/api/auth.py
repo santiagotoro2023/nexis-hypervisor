@@ -1,7 +1,7 @@
 """
 NeXiS Hypervisor — Authentication
 All authentication is delegated to the paired NeXiS Controller via SSO.
-Local fallback user (creator / Asdf1234!) provides emergency access only.
+Local fallback user provides emergency access only.
 """
 import hashlib
 import json
@@ -10,9 +10,9 @@ import socket
 import ssl
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import config
@@ -20,8 +20,10 @@ import db
 
 router = APIRouter()
 
+_SESSION_TTL_DAYS = 90
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────
 
 def _hash(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -29,9 +31,11 @@ def _hash(pw: str) -> str:
 
 def _create_session(username: str) -> str:
     token = secrets.token_hex(32)
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(days=_SESSION_TTL_DAYS)).isoformat()
     db.conn().execute(
-        'INSERT INTO sessions (token, username, created_at) VALUES (?,?,?)',
-        (token, username, datetime.now(timezone.utc).isoformat()),
+        'INSERT INTO sessions (token, username, created_at, expires_at) VALUES (?,?,?,?)',
+        (token, username, now.isoformat(), expires_at),
     )
     db.conn().commit()
     return token
@@ -123,7 +127,7 @@ def _local_check(username: str, password: str) -> bool:
     return secrets.compare_digest(_hash(password), row['hash'])
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     username: str
@@ -136,7 +140,7 @@ class SetupRequest(BaseModel):
     password: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────────────────
 
 @router.get('/status')
 def status():
@@ -219,5 +223,10 @@ def login(req: LoginRequest):
 
 
 @router.post('/logout')
-def logout():
+def logout(request: Request):
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        db.conn().execute('DELETE FROM sessions WHERE token = ?', (token,))
+        db.conn().commit()
     return {'ok': True}
