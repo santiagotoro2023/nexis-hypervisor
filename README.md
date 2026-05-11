@@ -1,6 +1,6 @@
 # NeXiS Hypervisor
 
-A QEMU/KVM and LXC hypervisor management node for the NeXiS ecosystem. Runs a FastAPI daemon with a React web UI, exposes a full REST API for VM and container lifecycle management, and integrates with NeXiS Controller for SSO and centralised monitoring.
+A QEMU/KVM and LXC hypervisor management node for the NeXiS ecosystem. Runs a FastAPI daemon with a React web UI, exposes a full REST API for VM and container lifecycle management, and integrates with NeXiS Controller for SSO, centralised monitoring, and cross-node clustering.
 
 ---
 
@@ -11,7 +11,7 @@ NeXiS Controller  — central intelligence · SSO · management plane
         ↕ SSO + device registration + metrics polling
 NeXiS Hypervisor  — one per compute node  ← you are here
         ↑
-NeXiS Worker      — Android / Linux desktop client
+NeXiS Worker      — Android / Linux / Windows desktop client
 ```
 
 | Repo | Role |
@@ -19,6 +19,14 @@ NeXiS Worker      — Android / Linux desktop client
 | [nexis-controller](https://github.com/santiagotoro2023/nexis-controller) | Central AI assistant · SSO provider · management plane |
 | **nexis-hypervisor** | Per-node VM and container management |
 | [nexis-worker](https://github.com/santiagotoro2023/nexis-worker) | Mobile and desktop client |
+
+---
+
+## What's New in v1.0.8
+
+- **SSO login via Controller** — the login page now has three fields (Controller URL, Username, Password); authentication is delegated to `POST /api/auth/login-via-controller` which validates credentials against the paired NeXiS Controller and issues a local session on success
+- **Auto-clustering** — Hypervisor nodes that are registered with the same Controller automatically discover each other via `GET /api/cluster/peers`; `GET /api/cluster/vms` aggregates VMs across all discovered peers; live VM migration between peers is available at `POST /api/cluster/migrate` (uses `virsh migrate --live --persistent --undefinesource`)
+- **Controller metrics polling** — `GET /api/status` (introduced in v1.0.7) returns `cpu_percent`, `mem_percent`, `disk_percent`, `vms_total`, `vms_running`, `cts_total`, `cts_running`; this is the endpoint the Controller polls on demand to display live utilisation stats in its Hypervisor page
 
 ---
 
@@ -93,6 +101,7 @@ The daemon listens on `https://0.0.0.0:8443` by default. TLS certificates are ge
 
 Multiple Hypervisor nodes that are all paired to the same Controller automatically form a cluster visible from the Controller's Hypervisor page. Within a Hypervisor node itself, the cluster API (`/api/cluster`) lets nodes peer directly:
 
+- **Peer discovery:** `GET /api/cluster/peers` — discovers sibling nodes registered with the same Controller
 - **Node registration:** `POST /api/cluster/nodes/join`
 - **Heartbeat:** `POST /api/cluster/nodes/heartbeat`
 - **Aggregate VM view:** `GET /api/cluster/vms` — VMs from local + all remote nodes
@@ -100,8 +109,9 @@ Multiple Hypervisor nodes that are all paired to the same Controller automatical
 - **Aggregate ISO view:** `GET /api/cluster/isos`
 - **Per-node proxy:** `GET /api/cluster/nodes/{id}/vms`, `GET /api/cluster/nodes/{id}/metrics`
 - **Remote VM actions:** `POST /api/cluster/nodes/{id}/vms/{vm_id}/{action}`
+- **Live migration:** `POST /api/cluster/migrate` — uses `virsh migrate --live --persistent --undefinesource`
 
-VM live migration between nodes: `POST /api/vms/{vm_id}/migrate` with `{ "target_uri": "qemu+ssh://...", "live": true }`.
+VM live migration between nodes is also available directly: `POST /api/vms/{vm_id}/migrate` with `{ "target_uri": "qemu+ssh://...", "live": true }`.
 
 ### Controller Integration (SSO + Status Feed)
 
@@ -111,7 +121,7 @@ Pairing with a Controller (`POST /api/nexis/pair`) does three things:
 2. Self-registers the node at `/api/devices/register` on the Controller
 3. Starts a background task that pushes host metrics to the Controller every 30 seconds
 
-All subsequent logins to the Hypervisor are proxied to the Controller (SSO). A local emergency fallback account is available if the Controller is unreachable.
+All subsequent logins to the Hypervisor are proxied to the Controller (SSO) via `POST /api/auth/login-via-controller`. The login UI has three fields: Controller URL, Username, and Password. A local emergency fallback account is available if the Controller is unreachable.
 
 ---
 
@@ -167,11 +177,12 @@ Password: Asdf1234!   ← change immediately
 
 ## Authentication
 
-All login requests are forwarded to the paired NeXiS Controller (`POST /api/auth/login` on the Controller). If the Controller is reachable and the credentials are valid, a local session token (90-day TTL) is issued. If the Controller is unreachable, the local fallback account provides emergency access.
+All login requests are forwarded to the paired NeXiS Controller (`POST /api/auth/login-via-controller`). The login page presents three fields — Controller URL, Username, and Password. If the Controller is reachable and the credentials are valid, a local session token (90-day TTL) is issued. If the Controller is unreachable, the local fallback account provides emergency access.
 
 API requests must include `Authorization: Bearer <token>` on all endpoints except:
 - `GET /api/auth/status`
 - `POST /api/auth/login`
+- `POST /api/auth/login-via-controller`
 - `POST /api/auth/setup`
 - `POST /api/auth/setup/complete`
 
@@ -182,7 +193,7 @@ WebSocket console connections pass the token as a query parameter: `?token=<toke
 ## Configuration
 
 | Path | Purpose |
-|------|---------|
+|------|--------|
 | `/opt/nexis-hypervisor/` | Application source, Python venv, built web UI |
 | `/etc/nexis-hypervisor/` | SQLite database, TLS certificate and key, runtime config |
 | `/etc/systemd/system/nexis-hypervisor-daemon.service` | Service unit |
@@ -201,7 +212,8 @@ All endpoints require `Authorization: Bearer <token>` unless noted. Interactive 
 |--------|----------|-------------|
 | `GET` | `/api/auth/status` | Setup/pairing status · public |
 | `POST` | `/api/auth/setup` | First-run wizard — connect to Controller · public |
-| `POST` | `/api/auth/login` | Authenticate · returns Bearer token · public |
+| `POST` | `/api/auth/login` | Authenticate locally · returns Bearer token · public |
+| `POST` | `/api/auth/login-via-controller` | SSO login — validate credentials against Controller · public |
 | `POST` | `/api/auth/logout` | Invalidate session token |
 
 ### Virtual Machines
@@ -284,6 +296,7 @@ All endpoints require `Authorization: Bearer <token>` unless noted. Interactive 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/cluster/nodes` | List cluster nodes |
+| `GET` | `/api/cluster/peers` | Discover peer hypervisors registered with the same Controller |
 | `POST` | `/api/cluster/nodes/join` | Add a peer node |
 | `DELETE` | `/api/cluster/nodes/{id}` | Remove a node |
 | `POST` | `/api/cluster/nodes/heartbeat` | Node heartbeat |
@@ -293,6 +306,7 @@ All endpoints require `Authorization: Bearer <token>` unless noted. Interactive 
 | `GET` | `/api/cluster/nodes/{id}/vms` | VMs on specific node |
 | `GET` | `/api/cluster/nodes/{id}/metrics` | Metrics from specific node |
 | `POST` | `/api/cluster/nodes/{id}/vms/{vm_id}/{action}` | VM action on specific node |
+| `POST` | `/api/cluster/migrate` | Live migration via virsh (`--live --persistent --undefinesource`) |
 | `GET` | `/api/cluster/summary` | Node count and status summary |
 
 ### Controller Integration
