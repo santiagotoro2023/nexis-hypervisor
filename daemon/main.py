@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import config
 import db
 from api import auth, vms, containers, storage, network, metrics, console, nexis, system, cluster
+from core.metrics_collector import collect as _collect_metrics
 
 config.load()
 db.init()
@@ -88,6 +89,30 @@ app.include_router(console.router,    prefix='/api',            tags=['console']
 app.include_router(nexis.router,      prefix='/api/nexis',      tags=['nexis'])
 app.include_router(system.router,     prefix='/api/system',     tags=['system'])
 app.include_router(cluster.router,    prefix='/api/cluster',    tags=['cluster'])
+
+
+@app.get('/api/status')
+def api_status():
+    """Metrics snapshot for the NeXiS Controller — returns host + VM/container stats."""
+    m = _collect_metrics()
+    return {
+        'cpu_percent':    m['cpu_percent'],
+        'mem_percent':    m['memory_percent'],
+        'disk_percent':   m['disk_percent'],
+        'vms_total':      m['vm_count'],
+        'vms_running':    m['vm_running'],
+        'cts_total':      m['container_count'],
+        'cts_running':    m['container_running'],
+        'hostname':       m['hostname'],
+        'uptime_seconds': m.get('uptime_seconds', 0),
+        'mem_used_gb':    m.get('memory_used_gb', 0),
+        'mem_total_gb':   m.get('memory_total_gb', 0),
+        'disk_used_gb':   m.get('disk_used_gb', 0),
+        'disk_total_gb':  m.get('disk_total_gb', 0),
+        'net_sent_mbps':  m.get('net_sent_mbps', 0),
+        'net_recv_mbps':  m.get('net_recv_mbps', 0),
+    }
+
 
 # Serve built frontend
 web_dist = config.WEB_DIR
