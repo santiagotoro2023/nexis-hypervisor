@@ -18,8 +18,6 @@ def _net_info(name: str) -> dict:
         xml = ET.fromstring(xml_str)
         fwd = xml.find('forward')
         ip_el = xml.find('ip')
-        bridge_el = xml.find('bridge')
-
         return {
             'name': name,
             'ip': ip_el.get('address') if ip_el is not None else None,
@@ -30,6 +28,31 @@ def _net_info(name: str) -> dict:
         }
     except Exception:
         return {'name': name, 'ip': None, 'mac': None, 'interfaces': [], 'active': False, 'forward_mode': 'unknown'}
+
+
+def _find_available_subnet() -> tuple[str, str, str, str]:
+    """Scan existing libvirt networks and return gateway/netmask/range for a free /24."""
+    used: set[int] = set()
+    output = _virsh('net-list', '--all', '--name')
+    for name in [n.strip() for n in output.splitlines() if n.strip()]:
+        try:
+            xml = ET.fromstring(_virsh('net-dumpxml', name))
+            ip_el = xml.find('ip')
+            if ip_el is not None:
+                parts = ip_el.get('address', '').split('.')
+                if len(parts) == 4:
+                    used.add(int(parts[2]))
+        except Exception:
+            pass
+    for third in range(100, 255):
+        if third not in used:
+            return (
+                f'192.168.{third}.1',
+                '255.255.255.0',
+                f'192.168.{third}.2',
+                f'192.168.{third}.254',
+            )
+    raise HTTPException(400, 'No free /24 available in the 192.168.x.0 range.')
 
 
 @router.get('/bridges')
@@ -45,12 +68,13 @@ class CreateBridge(BaseModel):
 
 @router.post('/bridges')
 def create_bridge(req: CreateBridge):
+    gateway, netmask, range_start, range_end = _find_available_subnet()
     xml = f"""<network>
   <name>{req.name}</name>
   <forward mode='nat'/>
   <bridge name='{req.name}' stp='on' delay='0'/>
-  <ip address='192.168.100.1' netmask='255.255.255.0'>
-    <dhcp><range start='192.168.100.2' end='192.168.100.254'/></dhcp>
+  <ip address='{gateway}' netmask='{netmask}'>
+    <dhcp><range start='{range_start}' end='{range_end}'/></dhcp>
   </ip>
 </network>"""
     import tempfile, os

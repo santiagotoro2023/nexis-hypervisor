@@ -8,16 +8,16 @@ Wants=libvirtd.service
 Type=simple
 User=root
 WorkingDirectory=/opt/nexis-hypervisor/daemon
-ExecStartPre=/opt/nexis-hypervisor/venv/bin/python -c "import db; db.init()"
 ExecStart=/opt/nexis-hypervisor/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=nexis-hypervisor-daemon
+Environment=PYTHONUNBUFFERED=1
 Environment=NEXIS_DATA=/etc/nexis-hypervisor
 Environment=NEXIS_ISO_DIR=/var/lib/libvirt/images
 Environment=NEXIS_PORT=8443
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexis-hypervisor-daemon
 
 [Install]
 WantedBy=multi-user.target

@@ -64,7 +64,7 @@ class MigrateRequest(BaseModel):
     live: bool = True
 
 
-# ── Static collection routes (must precede /{vm_id}) ─────────────────────────
+# ── Static collection routes (must precede /{vm_id}) ─────────────────────────────
 
 @router.get('')
 def list_vms():
@@ -77,7 +77,6 @@ def list_vms():
 @router.post('')
 def create_vm(req: CreateVM):
     try:
-        # Merge legacy disk_gb into disks list
         disks = req.disks if req.disks else [DiskSpec(size_gb=req.disk_gb)]
         nics = req.nics if req.nics else [NicSpec(network=req.network)]
         vm = lv.create_vm(
@@ -85,7 +84,7 @@ def create_vm(req: CreateVM):
             cores=req.cores, threads=req.threads, memory_mb=req.memory_mb,
             disks=[d.model_dump() for d in disks],
             nics=[n.model_dump() for n in nics],
-            os_iso=req.os_iso, os=req.os, machine=req.machine,
+            os_iso=req.os_iso, guest_os=req.os, machine=req.machine,
             cpu_mode=req.cpu_mode, display=req.display, video=req.video,
             boot_order=req.boot_order, enable_kvm=req.enable_kvm,
             balloon=req.balloon,
@@ -112,7 +111,7 @@ def list_backups():
         raise HTTPException(503, str(e))
 
 
-# ── Single VM routes ──────────────────────────────────────────────────────────
+# ── Single VM routes ────────────────────────────────────────────────────────────────
 
 @router.get('/{vm_id}')
 def get_vm(vm_id: str):
@@ -285,7 +284,7 @@ def migrate_vm(vm_id: str, req: MigrateRequest):
         raise HTTPException(400, str(e))
 
 
-# ── Snapshots ─────────────────────────────────────────────────────────────────
+# ── Snapshots ─────────────────────────────────────────────────────────────────────────
 
 @router.get('/{vm_id}/snapshots')
 def list_snapshots(vm_id: str):

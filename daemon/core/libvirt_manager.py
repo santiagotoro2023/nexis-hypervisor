@@ -3,7 +3,13 @@ libvirt wrapper for QEMU/KVM virtual machine management.
 All domain operations go through this module.
 """
 from __future__ import annotations
+
+import os
+import re
+import subprocess
+import uuid
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -30,9 +36,23 @@ def _conn():
     global _CONN
     if not _LIBVIRT:
         raise RuntimeError('libvirt-python not installed')
-    if _CONN is None or _CONN.isAlive() == 0:
+    try:
+        alive = _CONN is not None and _CONN.isAlive() == 1
+    except Exception:
+        alive = False
+    if not alive:
         _CONN = libvirt.open('qemu:///system')
     return _CONN
+
+
+def _qcow2_virtual_size(path: str) -> int:
+    """Read virtual disk size from the qcow2 header (offset 24, 8 bytes big-endian)."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(24)
+            return int.from_bytes(f.read(8), 'big')
+    except Exception:
+        return 0
 
 
 def list_vms() -> list[dict]:
@@ -69,16 +89,15 @@ def _domain_info(dom) -> dict:
     os_type = xml.find('os/type')
     os_str = os_type.get('arch', 'unknown') if os_type is not None else 'unknown'
 
+    # Virtual disk size from qcow2 header — not compressed on-disk size
     disk_gb = 0
     for disk in xml.findall('.//disk[@type="file"][@device="disk"]'):
         src = disk.find('source')
         if src is not None:
             path = src.get('file', '')
-            try:
-                import os
-                disk_gb = max(disk_gb, os.path.getsize(path) // (1024 ** 3))
-            except Exception:
-                pass
+            virtual_bytes = _qcow2_virtual_size(path)
+            if virtual_bytes > 0:
+                disk_gb = max(disk_gb, virtual_bytes // (1024 ** 3))
 
     info = {
         'id': dom.UUIDString(),
@@ -160,16 +179,13 @@ def _nic_xml(idx: int, nic: dict) -> str:
 
 
 def create_vm(name: str, vcpus: int = 2, memory_mb: int = 2048,
-              disk_gb: int = 20, os_iso: str | None = None, os: str = 'linux',
+              disk_gb: int = 20, os_iso: str | None = None, guest_os: str = 'linux',
               network: str = 'default', sockets: int = 1, cores: int = 2,
               threads: int = 1, disks: list | None = None, nics: list | None = None,
               machine: str = 'q35', cpu_mode: str = 'host-model',
               display: str = 'vnc', video: str = 'qxl',
               boot_order: list | None = None, enable_kvm: bool = True,
               balloon: bool = True) -> dict:
-    import os as _os
-    import subprocess
-
     c = _conn()
 
     if disks is None:
@@ -179,7 +195,7 @@ def create_vm(name: str, vcpus: int = 2, memory_mb: int = 2048,
     if boot_order is None:
         boot_order = ['cdrom', 'hd']
 
-    _os.makedirs('/var/lib/libvirt/images', exist_ok=True)
+    os.makedirs('/var/lib/libvirt/images', exist_ok=True)
 
     disk_xmls = []
     for idx, disk in enumerate(disks):
@@ -194,8 +210,8 @@ def create_vm(name: str, vcpus: int = 2, memory_mb: int = 2048,
 
     iso_block = ''
     if os_iso:
-        iso_path = os_iso if _os.path.isabs(os_iso) else f'/var/lib/libvirt/images/{os_iso}'
-        if _os.path.exists(iso_path):
+        iso_path = os_iso if os.path.isabs(os_iso) else f'/var/lib/libvirt/images/{os_iso}'
+        if os.path.exists(iso_path):
             iso_block = (
                 f"    <disk type='file' device='cdrom'>\n"
                 f"      <driver name='qemu' type='raw'/>\n"
@@ -206,9 +222,7 @@ def create_vm(name: str, vcpus: int = 2, memory_mb: int = 2048,
             )
 
     nic_xmls = [_nic_xml(i, n) for i, n in enumerate(nics)]
-
     boot_xml = ''.join(f"<boot dev='{b}'/>" for b in boot_order)
-
     domain_type = 'kvm' if enable_kvm else 'qemu'
     total_vcpus = sockets * cores * threads
 
@@ -219,7 +233,6 @@ def create_vm(name: str, vcpus: int = 2, memory_mb: int = 2048,
         display_xml = "    <graphics type='spice' autoport='yes' listen='127.0.0.1'/>"
 
     video_xml = f"    <video><model type='{video}'/></video>"
-
     balloon_xml = "    <memballoon model='virtio'/>" if balloon else "    <memballoon model='none'/>"
 
     xml = f"""<domain type='{domain_type}'>
@@ -334,7 +347,6 @@ def get_hardware(vm_id: str) -> dict:
 
 
 def edit_hardware(vm_id: str, changes: dict) -> dict:
-    import os as _os, subprocess
     dom = _find(vm_id)
     state_code, _ = dom.state()
     live = state_code == 1  # VIR_DOMAIN_RUNNING
@@ -358,29 +370,25 @@ def edit_hardware(vm_id: str, changes: dict) -> dict:
         xml = ET.fromstring(dom.XMLDesc())
         existing = xml.findall('.//disk[@type="file"][@device="disk"]')
         idx = len(existing)
-        name = dom.name()
-        disk_path = f'/var/lib/libvirt/images/{name}-disk{idx}.qcow2'
-        size_gb = disk.get('size_gb', 20)
-        fmt = disk.get('format', 'qcow2')
+        disk_path = f'/var/lib/libvirt/images/{dom.name()}-disk{idx}.qcow2'
         subprocess.run(
-            ['qemu-img', 'create', '-f', fmt, disk_path, f'{size_gb}G'],
+            ['qemu-img', 'create', '-f', disk.get('format', 'qcow2'),
+             disk_path, f"{disk.get('size_gb', 20)}G"],
             check=True, capture_output=True,
         )
-        disk_xml_str = _disk_xml(idx, disk, disk_path)
         flags = getattr(libvirt, 'VIR_DOMAIN_AFFECT_CONFIG', 2)
         if live:
             flags |= getattr(libvirt, 'VIR_DOMAIN_AFFECT_LIVE', 1)
-        dom.attachDeviceFlags(disk_xml_str, flags)
+        dom.attachDeviceFlags(_disk_xml(idx, disk, disk_path), flags)
 
     if 'add_nic' in changes:
         nic = changes['add_nic']
         xml = ET.fromstring(dom.XMLDesc())
         idx = len(xml.findall('.//interface'))
-        nic_xml_str = _nic_xml(idx, nic)
         flags = getattr(libvirt, 'VIR_DOMAIN_AFFECT_CONFIG', 2)
         if live:
             flags |= getattr(libvirt, 'VIR_DOMAIN_AFFECT_LIVE', 1)
-        dom.attachDeviceFlags(nic_xml_str, flags)
+        dom.attachDeviceFlags(_nic_xml(idx, nic), flags)
 
     return get_hardware(vm_id)
 
@@ -403,15 +411,12 @@ def reboot_vm(vm_id: str):
 
 def delete_vm(vm_id: str):
     dom = _find(vm_id)
-    # Remove disk images
     xml = ET.fromstring(dom.XMLDesc())
     for disk in xml.findall('.//disk[@type="file"][@device="disk"]'):
         src = disk.find('source')
         if src is not None:
-            path = src.get('file', '')
             try:
-                import os
-                os.remove(path)
+                os.remove(src.get('file', ''))
             except Exception:
                 pass
     try:
@@ -430,7 +435,6 @@ def list_snapshots(vm_id: str) -> list[dict]:
     for snap in dom.listAllSnapshots():
         xml = ET.fromstring(snap.getXMLDesc())
         created_str = xml.findtext('creationTime') or '0'
-        from datetime import datetime, timezone
         created = datetime.fromtimestamp(int(created_str), timezone.utc).isoformat()
         result.append({'name': snap.getName(), 'created': created})
     return result
@@ -438,66 +442,63 @@ def list_snapshots(vm_id: str) -> list[dict]:
 
 def create_snapshot(vm_id: str, name: str):
     dom = _find(vm_id)
-    xml = f"<domainsnapshot><name>{name}</name></domainsnapshot>"
-    dom.snapshotCreateXML(xml)
+    dom.snapshotCreateXML(f'<domainsnapshot><name>{name}</name></domainsnapshot>')
 
 
 def restore_snapshot(vm_id: str, snap_name: str):
     dom = _find(vm_id)
-    snap = dom.snapshotLookupByName(snap_name)
-    dom.revertToSnapshot(snap)
+    dom.revertToSnapshot(dom.snapshotLookupByName(snap_name))
 
 
 def delete_snapshot(vm_id: str, snap_name: str):
     dom = _find(vm_id)
-    snap = dom.snapshotLookupByName(snap_name)
-    snap.delete()
+    dom.snapshotLookupByName(snap_name).delete()
 
 
-# ── Clone ─────────────────────────────────────────────────────────────────────
+# ── Clone ────────────────────────────────────────────────────────────────────────────────
 
 def clone_vm(vm_id: str, new_name: str) -> dict:
-    import os, subprocess, uuid, re
-
     dom = _find(vm_id)
     xml_str = dom.XMLDesc()
     xml = ET.fromstring(xml_str)
 
-    src_disk = None
-    for disk in xml.findall('.//disk[@type="file"][@device="disk"]'):
+    # Collect every data disk: old_path -> new_path
+    disk_map: dict[str, str] = {}
+    for idx, disk in enumerate(xml.findall('.//disk[@type="file"][@device="disk"]')):
         src = disk.find('source')
-        if src is not None:
-            src_disk = src.get('file', '')
-            break
-    if not src_disk:
-        raise ValueError('Source VM has no disk image')
+        if src is None:
+            continue
+        old_path = src.get('file', '')
+        if not old_path:
+            continue
+        ext = os.path.splitext(old_path)[1] or '.qcow2'
+        disk_map[old_path] = f'/var/lib/libvirt/images/{new_name}-disk{idx}{ext}'
 
-    dst_disk = f'/var/lib/libvirt/images/{new_name}.qcow2'
-    subprocess.run(
-        ['qemu-img', 'convert', '-f', 'qcow2', '-O', 'qcow2', src_disk, dst_disk],
-        check=True, capture_output=True,
-    )
+    if not disk_map:
+        raise ValueError('Source VM has no disk images')
 
-    new_uuid = str(uuid.uuid4())
-    xml_str = re.sub(r'<uuid>[^<]*</uuid>', f'<uuid>{new_uuid}</uuid>', xml_str)
+    for old_path, new_path in disk_map.items():
+        subprocess.run(
+            ['qemu-img', 'convert', '-f', 'qcow2', '-O', 'qcow2', old_path, new_path],
+            check=True, capture_output=True,
+        )
+
+    xml_str = re.sub(r'<uuid>[^<]*</uuid>', f'<uuid>{uuid.uuid4()}</uuid>', xml_str)
     xml_str = re.sub(r'<name>[^<]*</name>', f'<name>{new_name}</name>', xml_str, count=1)
-    xml_str = xml_str.replace(src_disk, dst_disk)
+    for old_path, new_path in disk_map.items():
+        xml_str = xml_str.replace(old_path, new_path)
     xml_str = re.sub(r"port='-?\d+'", "port='-1'", xml_str)
     xml_str = re.sub(r"<mac address='[^']*'/>", '', xml_str)
 
-    new_dom = _conn().defineXML(xml_str)
-    return _domain_info(new_dom)
+    return _domain_info(_conn().defineXML(xml_str))
 
 
-# ── Backup ────────────────────────────────────────────────────────────────────
+# ── Backup ───────────────────────────────────────────────────────────────────────────────
 
 _BACKUP_DIR = '/var/lib/nexis/backups'
 
 
 def backup_vm(vm_id: str) -> dict:
-    import os, subprocess
-    from datetime import datetime, timezone
-
     dom = _find(vm_id)
     xml = ET.fromstring(dom.XMLDesc())
 
@@ -521,12 +522,10 @@ def backup_vm(vm_id: str) -> dict:
     with open(f'{dst}.xml', 'w') as f:
         f.write(dom.XMLDesc())
 
-    size = os.path.getsize(dst)
-    return {'path': dst, 'size_bytes': size, 'name': os.path.basename(dst)}
+    return {'path': dst, 'size_bytes': os.path.getsize(dst), 'name': os.path.basename(dst)}
 
 
 def list_backups() -> list[dict]:
-    import os
     if not os.path.isdir(_BACKUP_DIR):
         return []
     result = []
@@ -536,28 +535,24 @@ def list_backups() -> list[dict]:
         path = os.path.join(_BACKUP_DIR, fname)
         try:
             size = os.path.getsize(path)
-            mtime = os.path.getmtime(path)
-            from datetime import datetime, timezone
-            created = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+            created = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat()
         except Exception:
             size, created = 0, ''
         result.append({'name': fname, 'path': path, 'size_bytes': size, 'created': created})
     return result
 
 
-# ── Migrate ───────────────────────────────────────────────────────────────────
+# ── Migrate ────────────────────────────────────────────────────────────────────────────
 
 def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
     if not _LIBVIRT:
         raise RuntimeError('libvirt-python not installed')
-
     dom = _find(vm_id)
     flags = 0
     if live:
         flags |= getattr(libvirt, 'VIR_MIGRATE_LIVE', 1)
     flags |= getattr(libvirt, 'VIR_MIGRATE_PERSIST_DEST', 8)
     flags |= getattr(libvirt, 'VIR_MIGRATE_UNDEFINE_SOURCE', 16)
-
     dest_conn = libvirt.open(target_uri)
     try:
         dom.migrate(dest_conn, flags, None, None, 0)
@@ -565,7 +560,7 @@ def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
         dest_conn.close()
 
 
-# ── Templates ─────────────────────────────────────────────────────────────────
+# ── Templates ───────────────────────────────────────────────────────────────────────────
 
 def set_template_flag(vm_id: str, is_template: bool) -> None:
     import db
