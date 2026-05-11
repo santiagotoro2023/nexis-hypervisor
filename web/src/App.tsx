@@ -7,6 +7,7 @@ import { VMList } from './components/vms/VMList'
 import { VMDetail } from './components/vms/VMDetail'
 import { VMConsole } from './components/console/VMConsole'
 import { ContainerList } from './components/containers/ContainerList'
+import { ContainerDetail } from './components/containers/ContainerDetail'
 import { ContainerShell } from './components/console/ContainerShell'
 import { NodeShell } from './components/console/NodeShell'
 import { Storage } from './components/storage/Storage'
@@ -45,6 +46,7 @@ function AppRoutes() {
       <Route path="/vms/:id" element={<VMDetail />} />
       <Route path="/vms/:id/console" element={<VMConsole />} />
       <Route path="/containers" element={<ContainerList />} />
+      <Route path="/containers/:id" element={<ContainerDetail />} />
       <Route path="/containers/:id/shell" element={<ContainerShell />} />
       <Route path="/nodes/:nodeId/shell" element={<NodeShell />} />
       <Route path="/storage" element={<Storage />} />

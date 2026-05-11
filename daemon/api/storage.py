@@ -20,19 +20,19 @@ router = APIRouter()
 
 ISO_DIR = config.ISO_DIR
 
-# ── ISO Catalog ───────────────────────────────────────────────────────────────
+# ── ISO Catalog ───────────────────────────────────────────────────────────────────────
 
 ISO_CATALOG = [
-    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04',   'category': 'Linux',   'size_gb': 2.7,  'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso',                               'filename': 'ubuntu-24.04.2-live-server-amd64.iso'},
-    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04',   'category': 'Linux',   'size_gb': 1.8,  'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso',                               'filename': 'ubuntu-22.04.5-live-server-amd64.iso'},
-    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12',       'category': 'Linux',   'size_gb': 0.6,  'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',            'filename': 'debian-12.10.0-amd64-netinst.iso'},
-    {'id': 'alpine-3.21',          'name': 'Alpine Linux 3.21',       'version': '3.21',     'category': 'Linux',   'size_gb': 0.2,  'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.0-x86_64.iso',         'filename': 'alpine-standard-3.21.0-x86_64.iso'},
-    {'id': 'fedora-41-server',     'name': 'Fedora Server 41',        'version': '41',       'category': 'Linux',   'size_gb': 2.2,  'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/41/Server/x86_64/iso/Fedora-Server-netinstall-x86_64-41-1.4.iso', 'filename': 'Fedora-Server-netinstall-x86_64-41-1.4.iso'},
-    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9.5',      'category': 'Linux',   'size_gb': 1.5,  'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso',                  'filename': 'Rocky-9.5-x86_64-minimal.iso'},
-    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling',  'category': 'Linux',   'size_gb': 1.1,  'url': 'https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso',                                      'filename': 'archlinux-x86_64.iso'},
-    {'id': 'freebsd-14.2',         'name': 'FreeBSD 14.2',            'version': '14.2',     'category': 'BSD',     'size_gb': 1.1,  'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-amd64-disc1.iso', 'filename': 'FreeBSD-14.2-RELEASE-amd64-disc1.iso'},
-    {'id': 'opnsense-25',          'name': 'OPNsense 25.1',           'version': '25.1',     'category': 'Network', 'size_gb': 1.0,  'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.1/OPNsense-25.1-dvd-amd64.iso.bz2',            'filename': 'OPNsense-25.1-dvd-amd64.iso.bz2'},
-    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',    'category': 'Storage', 'size_gb': 2.5,  'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',           'filename': 'TrueNAS-SCALE-24.10.2.iso'},
+    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04.2', 'category': 'Linux',   'size_gb': 2.7,  'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso',                                              'filename': 'ubuntu-24.04.2-live-server-amd64.iso'},
+    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04.5', 'category': 'Linux',   'size_gb': 1.8,  'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso',                                              'filename': 'ubuntu-22.04.5-live-server-amd64.iso'},
+    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12.10',   'category': 'Linux',   'size_gb': 0.6,  'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',                           'filename': 'debian-12.10.0-amd64-netinst.iso'},
+    {'id': 'alpine-3.21',          'name': 'Alpine Linux 3.21',       'version': '3.21.0',  'category': 'Linux',   'size_gb': 0.2,  'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.0-x86_64.iso',                          'filename': 'alpine-standard-3.21.0-x86_64.iso'},
+    {'id': 'fedora-41-server',     'name': 'Fedora Server 41',        'version': '41',      'category': 'Linux',   'size_gb': 2.2,  'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/41/Server/x86_64/iso/Fedora-Server-dvd-x86_64-41-1.4.iso',   'filename': 'Fedora-Server-dvd-x86_64-41-1.4.iso'},
+    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9.5',     'category': 'Linux',   'size_gb': 1.5,  'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso',                                   'filename': 'Rocky-9.5-x86_64-minimal.iso'},
+    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling', 'category': 'Linux',   'size_gb': 1.1,  'url': 'https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso',                                                         'filename': 'archlinux-x86_64.iso'},
+    {'id': 'freebsd-14.2',         'name': 'FreeBSD 14.2',            'version': '14.2',    'category': 'BSD',     'size_gb': 1.1,  'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-amd64-disc1.iso',                  'filename': 'FreeBSD-14.2-RELEASE-amd64-disc1.iso'},
+    {'id': 'opnsense-25',          'name': 'OPNsense 25.1',           'version': '25.1',    'category': 'Network', 'size_gb': 1.0,  'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.1/OPNsense-25.1-dvd-amd64.iso.bz2',                             'filename': 'OPNsense-25.1-dvd-amd64.iso.bz2'},
+    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',   'category': 'Storage', 'size_gb': 2.5,  'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',                            'filename': 'TrueNAS-SCALE-24.10.2.iso'},
 ]
 
 
@@ -50,7 +50,7 @@ class AddPoolRequest(BaseModel):
     options: str = ''      # extra mount options
 
 
-# ── Storage pools ─────────────────────────────────────────────────────────────
+# ── Storage pools ─────────────────────────────────────────────────────────────────────────
 
 def _pool_disk_info(path: str) -> dict:
     try:
@@ -157,7 +157,7 @@ def remove_pool(pool_id: str):
     return {'ok': True}
 
 
-# ── ISO management ────────────────────────────────────────────────────────────
+# ── ISO management ────────────────────────────────────────────────────────────────────────
 
 def _downloaded_isos() -> set[str]:
     try:

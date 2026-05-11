@@ -21,14 +21,24 @@ except ImportError:
 
 _CONN: Any = None
 
+# libvirt domain state codes:
+#   0 = VIR_DOMAIN_NOSTATE
+#   1 = VIR_DOMAIN_RUNNING
+#   2 = VIR_DOMAIN_BLOCKED   (on hypervisor resource)
+#   3 = VIR_DOMAIN_PAUSED
+#   4 = VIR_DOMAIN_SHUTDOWN  (graceful shutdown in progress)
+#   5 = VIR_DOMAIN_SHUTOFF   (fully stopped / newly defined)
+#   6 = VIR_DOMAIN_CRASHED
+#   7 = VIR_DOMAIN_PMSUSPENDED
 STATE_MAP = {
     0: 'unknown',
     1: 'running',
-    2: 'paused',
-    3: 'stopped',   # shutting down
-    4: 'stopped',   # shut off
-    5: 'crashed',
-    6: 'paused',    # pmsuspended
+    2: 'running',   # blocked — still consuming CPU, treat as running
+    3: 'paused',
+    4: 'stopped',   # shutdown (graceful shutdown in progress)
+    5: 'stopped',   # shutoff  (fully off — this is the normal post-define state)
+    6: 'crashed',
+    7: 'paused',    # pmsuspended
 }
 
 
@@ -455,7 +465,7 @@ def delete_snapshot(vm_id: str, snap_name: str):
     dom.snapshotLookupByName(snap_name).delete()
 
 
-# ── Clone ────────────────────────────────────────────────────────────────────────────────
+# ── Clone ────────────────────────────────────────────────────────────────────────────────────
 
 def clone_vm(vm_id: str, new_name: str) -> dict:
     dom = _find(vm_id)
@@ -493,7 +503,7 @@ def clone_vm(vm_id: str, new_name: str) -> dict:
     return _domain_info(_conn().defineXML(xml_str))
 
 
-# ── Backup ───────────────────────────────────────────────────────────────────────────────
+# ── Backup ───────────────────────────────────────────────────────────────────────────────────────
 
 _BACKUP_DIR = '/var/lib/nexis/backups'
 
@@ -542,7 +552,7 @@ def list_backups() -> list[dict]:
     return result
 
 
-# ── Migrate ────────────────────────────────────────────────────────────────────────────
+# ── Migrate ────────────────────────────────────────────────────────────────────────────────────
 
 def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
     if not _LIBVIRT:
@@ -560,7 +570,7 @@ def migrate_vm(vm_id: str, target_uri: str, live: bool = True) -> None:
         dest_conn.close()
 
 
-# ── Templates ───────────────────────────────────────────────────────────────────────────
+# ── Templates ───────────────────────────────────────────────────────────────────────────────────────
 
 def set_template_flag(vm_id: str, is_template: bool) -> None:
     import db

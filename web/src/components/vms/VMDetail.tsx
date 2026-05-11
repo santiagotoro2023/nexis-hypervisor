@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Square, RotateCcw, Zap, Camera, ChevronLeft, Trash2, Terminal } from 'lucide-react'
+import { Play, Square, RotateCcw, Zap, Camera, ChevronLeft, Trash2, Terminal, Pause, RefreshCw } from 'lucide-react'
 import { AppLayout } from '../layout/AppLayout'
 import { StatusBadge } from '../common/StatusBadge'
 import { NxSpinner } from '../common/NxSpinner'
@@ -56,6 +56,10 @@ export function VMDetail() {
     </AppLayout>
   )
 
+  const isRunning = vm.status === 'running'
+  const isStopped = vm.status === 'stopped'
+  const isPaused  = vm.status === 'paused'
+
   return (
     <AppLayout title={vm.name}>
       <div className="space-y-5">
@@ -67,27 +71,44 @@ export function VMDetail() {
           <div className="ml-auto flex items-center gap-2">
             {acting ? <NxSpinner size={14} /> : (
               <>
-                {vm.status === 'stopped' && (
+                {isStopped && (
                   <button className="nx-btn-primary flex items-center gap-2" onClick={() => action('start')}>
                     <Play size={13} /> Start
                   </button>
                 )}
-                {vm.status === 'running' && (
+                {isPaused && (
+                  <button className="nx-btn-primary flex items-center gap-2" onClick={() => action('resume')}>
+                    <Play size={13} /> Resume
+                  </button>
+                )}
+                {(isRunning || isPaused) && (
+                  <button className="nx-btn flex items-center gap-2 border border-nx-border text-nx-fg2 hover:text-nx-fg" onClick={() => action('reboot')}>
+                    <RotateCcw size={13} /> Reboot
+                  </button>
+                )}
+                {isRunning && (
                   <>
-                    <button className="nx-btn flex items-center gap-2 border border-nx-border text-nx-fg2 hover:text-nx-fg" onClick={() => action('reboot')}>
-                      <RotateCcw size={13} /> Reboot
+                    <button className="nx-btn flex items-center gap-2 border border-nx-orange/30 text-nx-orange hover:bg-nx-orange/10" onClick={() => action('suspend')}>
+                      <Pause size={13} /> Suspend
                     </button>
-                    <button className="nx-btn-danger flex items-center gap-2" onClick={() => action('stop')}>
-                      <Square size={13} /> Stop
-                    </button>
-                    <button className="nx-btn flex items-center gap-2 border border-nx-orange/30 text-nx-orange hover:bg-nx-orange/10" onClick={() => navigate(`/vms/${id}/console`)}>
-                      <Terminal size={13} /> Console
+                    <button className="nx-btn flex items-center gap-2 border border-nx-border text-nx-fg2 hover:text-nx-fg" onClick={() => action('reset')}>
+                      <RefreshCw size={13} /> Reset
                     </button>
                   </>
                 )}
-                {vm.status === 'running' && (
+                {(isRunning || isPaused) && (
+                  <button className="nx-btn-danger flex items-center gap-2" onClick={() => action('stop')}>
+                    <Square size={13} /> Stop
+                  </button>
+                )}
+                {(isRunning || isPaused) && (
                   <button className="nx-btn-danger flex items-center gap-2" onClick={() => action('force-stop')}>
                     <Zap size={13} /> Force Stop
+                  </button>
+                )}
+                {isRunning && (
+                  <button className="nx-btn flex items-center gap-2 border border-nx-orange/30 text-nx-orange hover:bg-nx-orange/10" onClick={() => navigate(`/vms/${id}/console`)}>
+                    <Terminal size={13} /> Console
                   </button>
                 )}
               </>
@@ -109,7 +130,7 @@ export function VMDetail() {
           ))}
         </div>
 
-        {vm.status === 'running' && (
+        {isRunning && (
           <div className="grid grid-cols-2 gap-4">
             <div className="nx-card p-5">
               <NxGauge label="CPU" value={vm.cpu_percent ?? 0} unit="%" percent={vm.cpu_percent ?? 0} />
