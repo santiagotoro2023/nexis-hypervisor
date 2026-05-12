@@ -1,6 +1,6 @@
 # NeXiS Hypervisor
 
-![Version](https://img.shields.io/badge/version-1.0.8-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%2B%20React-green)
+![Version](https://img.shields.io/badge/version-1.0.9-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%2B%20React-green)
 
 A QEMU/KVM and LXC hypervisor management node for the NeXiS ecosystem. Runs a FastAPI daemon with a React + TypeScript web UI, exposes a full REST API for VM and container lifecycle management, and integrates with NeXiS Controller for SSO, centralised monitoring, and zero-config multi-node clustering.
 
@@ -127,7 +127,7 @@ Password: Asdf1234!   ← change immediately
 ## Configuration
 
 | Path | Purpose |
-|------|---------|
+|------|--------|
 | `/opt/nexis-hypervisor/` | Application source, Python venv, built React web UI |
 | `/etc/nexis-hypervisor/` | SQLite database, TLS certificate and private key, runtime config |
 | `/etc/nexis-hypervisor/cert.pem` | Auto-generated TLS certificate |
@@ -140,7 +140,12 @@ Password: Asdf1234!   ← change immediately
 
 ### SSO via Controller
 
-All login requests are forwarded to the paired NeXiS Controller via `POST /api/auth/login-via-controller`. The login page presents three fields: **Controller URL**, **Username**, and **Password**. If the Controller is reachable and credentials are valid, a local session token (90-day TTL) is issued.
+All login requests are forwarded to the paired NeXiS Controller. The login page adapts to the node's setup state:
+
+- **Before setup**: three fields — Controller URL, Username, and Password
+- **After setup**: two fields only — Username and Password (the Controller URL was stored during the setup wizard and is reused automatically)
+
+If the Controller is reachable and credentials are valid, a local session token (90-day TTL) is issued.
 
 ### Local Fallback
 
@@ -183,7 +188,7 @@ WebSocket console connections pass the token as a query parameter: `wss://<host>
 | **Migrate** | Live or offline migration to another libvirt URI |
 | **Hardware edit** | Hot-add disk or NIC; change vCPU count or memory allocation |
 | **Snapshots** | Create, revert to, and delete named snapshots |
-| **Console** | In-browser VNC console via noVNC (WebSocket) |
+| **Console** | In-browser VNC console via noVNC (WebSocket); includes retry logic for VMs mid-boot |
 | **Serial console** | WebSocket-based serial console access |
 
 ### LXC Container Lifecycle
@@ -202,7 +207,7 @@ WebSocket console connections pass the token as a query parameter: `wss://<host>
 
 - List and inspect libvirt storage pools and volumes
 - Create and delete volumes within a pool
-- **ISO catalogue**: upload, list, and delete installation media
+- **ISO catalogue**: upload, list, and delete installation media; one-click download from a built-in catalogue of common distributions
 - Per-pool volume management
 
 ### Network Management
@@ -324,6 +329,8 @@ All endpoints require `Authorization: Bearer <token>` unless noted. Interactive 
 | `GET` | `/api/storage/isos/list` | List ISO images |
 | `POST` | `/api/storage/isos/upload` | Upload an ISO |
 | `DELETE` | `/api/storage/isos/{filename}` | Delete an ISO |
+| `GET` | `/api/storage/catalog` | List ISO catalogue with download status |
+| `POST` | `/api/storage/isos/fetch` | Stream-download an ISO from URL (SSE progress) |
 
 ### Network
 

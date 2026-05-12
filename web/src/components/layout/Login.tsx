@@ -5,17 +5,21 @@ interface Props {
   onLogin: (controllerUrl: string, username: string, password: string) => Promise<void>
   error: string | null
   loading: boolean
+  setupDone: boolean
 }
 
-export function Login({ onLogin, error, loading }: Props) {
+export function Login({ onLogin, error, loading, setupDone }: Props) {
   const [controllerUrl, setControllerUrl] = useState('')
   const [username, setUsername] = useState('')
   const [pw, setPw] = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    await onLogin(controllerUrl, username, pw)
+    // When setup is done, pass empty controllerUrl — useAuth will use /auth/login
+    await onLogin(setupDone ? '' : controllerUrl, username, pw)
   }
+
+  const canSubmit = !loading && username.trim() && pw.trim() && (setupDone || controllerUrl.trim())
 
   return (
     <div className="min-h-screen bg-nx-bg flex items-center justify-center p-4">
@@ -39,20 +43,22 @@ export function Login({ onLogin, error, loading }: Props) {
             <div className="text-[10px] text-nx-fg2 tracking-[0.3em] uppercase">Log in with NeXiS Controller</div>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Controller URL</label>
-              <input
-                type="url"
-                className="nx-input font-mono"
-                placeholder="https://192.168.1.x:8443"
-                value={controllerUrl}
-                onChange={e => setControllerUrl(e.target.value)}
-                autoFocus
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-            </div>
+            {!setupDone && (
+              <div>
+                <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Controller URL</label>
+                <input
+                  type="url"
+                  className="nx-input font-mono"
+                  placeholder="https://192.168.1.x:8443"
+                  value={controllerUrl}
+                  onChange={e => setControllerUrl(e.target.value)}
+                  autoFocus
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+            )}
             <div>
               <label className="block text-[10px] text-nx-fg2 tracking-[0.25em] uppercase mb-1.5">Username</label>
               <input
@@ -61,6 +67,7 @@ export function Login({ onLogin, error, loading }: Props) {
                 placeholder="your-username"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
+                autoFocus={setupDone}
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -86,7 +93,7 @@ export function Login({ onLogin, error, loading }: Props) {
             <button
               type="submit"
               className="nx-btn-primary w-full flex items-center justify-center gap-2 tracking-[0.2em] text-xs uppercase"
-              disabled={loading || !controllerUrl.trim() || !username.trim() || !pw.trim()}
+              disabled={!canSubmit}
             >
               {loading && <NxSpinner size={14} />}
               {loading ? 'Verifying...' : 'Authenticate'}

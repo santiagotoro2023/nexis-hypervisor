@@ -18,7 +18,7 @@ import { NxSpinner } from './components/common/NxSpinner'
 
 function AppRoutes() {
   const { authed, loading, error, login } = useAuth()
-  const { needsSetup, checked, recheckSetup } = useSetupStatus()
+  const { needsSetup, setupDone, checked, recheckSetup } = useSetupStatus()
 
   if (!checked) {
     return (
@@ -36,7 +36,7 @@ function AppRoutes() {
   }
 
   if (!authed) {
-    return <Login onLogin={login} error={error} loading={loading} />
+    return <Login onLogin={login} error={error} loading={loading} setupDone={setupDone} />
   }
 
   return (

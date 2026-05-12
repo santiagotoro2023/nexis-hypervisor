@@ -19,20 +19,42 @@ import db
 router = APIRouter()
 
 ISO_DIR = config.ISO_DIR
+# Ensure ISO directory exists
+ISO_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── ISO Catalog ───────────────────────────────────────────────────────────────────────
+# ── ISO Catalog ──────────────────────────────────────────────────────────────────────────────────────────
 
 ISO_CATALOG = [
-    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04.2', 'category': 'Linux',   'size_gb': 2.7,  'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso',                                              'filename': 'ubuntu-24.04.2-live-server-amd64.iso'},
-    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04.5', 'category': 'Linux',   'size_gb': 1.8,  'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso',                                              'filename': 'ubuntu-22.04.5-live-server-amd64.iso'},
-    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12.10',   'category': 'Linux',   'size_gb': 0.6,  'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',                           'filename': 'debian-12.10.0-amd64-netinst.iso'},
-    {'id': 'alpine-3.21',          'name': 'Alpine Linux 3.21',       'version': '3.21.0',  'category': 'Linux',   'size_gb': 0.2,  'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.0-x86_64.iso',                          'filename': 'alpine-standard-3.21.0-x86_64.iso'},
-    {'id': 'fedora-41-server',     'name': 'Fedora Server 41',        'version': '41',      'category': 'Linux',   'size_gb': 2.2,  'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/41/Server/x86_64/iso/Fedora-Server-dvd-x86_64-41-1.4.iso',   'filename': 'Fedora-Server-dvd-x86_64-41-1.4.iso'},
-    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9.5',     'category': 'Linux',   'size_gb': 1.5,  'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso',                                   'filename': 'Rocky-9.5-x86_64-minimal.iso'},
-    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling', 'category': 'Linux',   'size_gb': 1.1,  'url': 'https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso',                                                         'filename': 'archlinux-x86_64.iso'},
-    {'id': 'freebsd-14.2',         'name': 'FreeBSD 14.2',            'version': '14.2',    'category': 'BSD',     'size_gb': 1.1,  'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-amd64-disc1.iso',                  'filename': 'FreeBSD-14.2-RELEASE-amd64-disc1.iso'},
-    {'id': 'opnsense-25',          'name': 'OPNsense 25.1',           'version': '25.1',    'category': 'Network', 'size_gb': 1.0,  'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.1/OPNsense-25.1-dvd-amd64.iso.bz2',                             'filename': 'OPNsense-25.1-dvd-amd64.iso.bz2'},
-    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',   'category': 'Storage', 'size_gb': 2.5,  'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',                            'filename': 'TrueNAS-SCALE-24.10.2.iso'},
+    {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04.2', 'category': 'Linux',   'size_gb': 2.7,
+     'url': 'https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso',
+     'filename': 'ubuntu-24.04.2-live-server-amd64.iso'},
+    {'id': 'ubuntu-22.04-server',  'name': 'Ubuntu Server 22.04 LTS', 'version': '22.04.5', 'category': 'Linux',   'size_gb': 1.8,
+     'url': 'https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso',
+     'filename': 'ubuntu-22.04.5-live-server-amd64.iso'},
+    {'id': 'debian-12-netinst',    'name': 'Debian 12 (Bookworm)',    'version': '12.10',   'category': 'Linux',   'size_gb': 0.6,
+     'url': 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.10.0-amd64-netinst.iso',
+     'filename': 'debian-12.10.0-amd64-netinst.iso'},
+    {'id': 'alpine-3.21',          'name': 'Alpine Linux 3.21',       'version': '3.21.3',  'category': 'Linux',   'size_gb': 0.2,
+     'url': 'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.3-x86_64.iso',
+     'filename': 'alpine-standard-3.21.3-x86_64.iso'},
+    {'id': 'fedora-41-server',     'name': 'Fedora Server 41',        'version': '41',      'category': 'Linux',   'size_gb': 2.2,
+     'url': 'https://download.fedoraproject.org/pub/fedora/linux/releases/41/Server/x86_64/iso/Fedora-Server-dvd-x86_64-41-1.4.iso',
+     'filename': 'Fedora-Server-dvd-x86_64-41-1.4.iso'},
+    {'id': 'rocky-9-minimal',      'name': 'Rocky Linux 9 Minimal',   'version': '9.5',     'category': 'Linux',   'size_gb': 1.5,
+     'url': 'https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso',
+     'filename': 'Rocky-9.5-x86_64-minimal.iso'},
+    {'id': 'arch-latest',          'name': 'Arch Linux',              'version': 'rolling', 'category': 'Linux',   'size_gb': 1.1,
+     'url': 'https://mirrors.edge.kernel.org/archlinux/iso/latest/archlinux-x86_64.iso',
+     'filename': 'archlinux-x86_64.iso'},
+    {'id': 'freebsd-14.2',         'name': 'FreeBSD 14.2',            'version': '14.2',    'category': 'BSD',     'size_gb': 1.1,
+     'url': 'https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/14.2/FreeBSD-14.2-RELEASE-amd64-disc1.iso',
+     'filename': 'FreeBSD-14.2-RELEASE-amd64-disc1.iso'},
+    {'id': 'opnsense-25',          'name': 'OPNsense 25.1',           'version': '25.1',    'category': 'Network', 'size_gb': 1.0,
+     'url': 'https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.1/OPNsense-25.1-dvd-amd64.iso.bz2',
+     'filename': 'OPNsense-25.1-dvd-amd64.iso'},
+    {'id': 'truenas-scale',        'name': 'TrueNAS SCALE',           'version': '24.10',   'category': 'Storage', 'size_gb': 2.5,
+     'url': 'https://download.sys.truenas.net/TrueNAS-SCALE-ElectricEel/24.10.2/TrueNAS-SCALE-24.10.2.iso',
+     'filename': 'TrueNAS-SCALE-24.10.2.iso'},
 ]
 
 
@@ -45,12 +67,12 @@ class AddPoolRequest(BaseModel):
     name: str
     type: str = 'local'   # 'local' | 'nfs'
     path: str
-    server: str = ''       # NFS only: server address
-    share: str = ''        # NFS only: exported share path
-    options: str = ''      # extra mount options
+    server: str = ''       # NFS only
+    share: str = ''        # NFS only
+    options: str = ''
 
 
-# ── Storage pools ─────────────────────────────────────────────────────────────────────────
+# ── Storage pools ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _pool_disk_info(path: str) -> dict:
     try:
@@ -157,7 +179,7 @@ def remove_pool(pool_id: str):
     return {'ok': True}
 
 
-# ── ISO management ────────────────────────────────────────────────────────────────────────
+# ── ISO management ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _downloaded_isos() -> set[str]:
     try:
@@ -169,10 +191,7 @@ def _downloaded_isos() -> set[str]:
 @router.get('/catalog')
 def list_catalog():
     downloaded = _downloaded_isos()
-    result = []
-    for item in ISO_CATALOG:
-        result.append({**item, 'downloaded': item['filename'] in downloaded})
-    return result
+    return [{**item, 'downloaded': item['filename'] in downloaded} for item in ISO_CATALOG]
 
 
 @router.get('/isos')
@@ -216,6 +235,10 @@ async def fetch_iso(req: FetchRequest):
         raise HTTPException(400, 'URL must start with http/https.')
 
     filename = req.filename.strip() or req.url.split('/')[-1].split('?')[0]
+    # Strip compressed extensions that we'll decompress-stream to a plain .iso name
+    for ext in ['.bz2', '.gz', '.xz', '.zst']:
+        if filename.endswith(ext):
+            filename = filename[:-len(ext)]
     if not filename.endswith('.iso'):
         filename += '.iso'
     dest = ISO_DIR / filename
@@ -277,7 +300,6 @@ async def fetch_iso(req: FetchRequest):
 
 @router.get('/browse')
 def browse_storage(path: str = ''):
-    """Browse files within any configured storage pool path."""
     all_paths = [str(ISO_DIR)] + [p['path'] for p in _builtin_pools() + _db_pools()]
 
     if not path:
