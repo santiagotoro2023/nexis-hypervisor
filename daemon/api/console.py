@@ -7,6 +7,7 @@ WebSocket proxies:
 import asyncio
 import os
 import pty
+import shutil
 import struct
 import fcntl
 import termios
@@ -28,17 +29,32 @@ async def vm_console(ws: WebSocket, vm_id: str):
     try:
         vm = lv.get_vm(vm_id)
     except Exception:
+        await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m VM not found\r\n')
         await ws.close(code=1011)
         return
 
+    # VNC port may be -1 right after VM start; retry briefly
     vnc_port = vm.get('vnc_port')
     if not vnc_port:
+        for _ in range(10):
+            await asyncio.sleep(0.4)
+            try:
+                vm = lv.get_vm(vm_id)
+                vnc_port = vm.get('vnc_port')
+                if vnc_port:
+                    break
+            except Exception:
+                pass
+
+    if not vnc_port:
+        await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m VNC not available — is the VM running?\r\n')
         await ws.close(code=1011)
         return
 
     try:
         reader, writer = await asyncio.open_connection('127.0.0.1', vnc_port)
-    except Exception:
+    except Exception as e:
+        await ws.send_text(f'\r\n\x1b[1;31m[nexis]\x1b[0m Cannot connect to VNC ({e})\r\n')
         await ws.close(code=1011)
         return
 
@@ -70,12 +86,21 @@ async def vm_console(ws: WebSocket, vm_id: str):
     )
     for t in pending:
         t.cancel()
-    writer.close()
+    try:
+        writer.close()
+    except Exception:
+        pass
 
 
 @router.websocket('/containers/{ct_id}/shell')
 async def container_shell(ws: WebSocket, ct_id: str):
     await ws.accept()
+
+    lxc_attach = shutil.which('lxc-attach') or '/usr/bin/lxc-attach'
+    if not os.path.exists(lxc_attach):
+        await ws.send_text('\r\n\x1b[1;31m[nexis]\x1b[0m lxc-attach not found — is lxc installed?\r\n')
+        await ws.close(code=1011)
+        return
 
     master_fd, slave_fd = pty.openpty()
 
@@ -92,12 +117,20 @@ async def container_shell(ws: WebSocket, ct_id: str):
         'LANG': 'en_US.UTF-8',
         'PS1': r'\[\e[38;5;208m\]\u@\h\[\e[0m\]:\[\e[38;5;33m\]\w\[\e[0m\]\$ ',
     }
-    proc = await asyncio.create_subprocess_exec(
-        'lxc-attach', '-n', ct_id, '--', '/bin/sh', '-c', shell_cmd,
-        stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-        close_fds=True,
-        env=env,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            lxc_attach, '-n', ct_id, '--', '/bin/sh', '-c', shell_cmd,
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            close_fds=True,
+            env=env,
+        )
+    except Exception as e:
+        os.close(slave_fd)
+        os.close(master_fd)
+        await ws.send_text(f'\r\n\x1b[1;31m[nexis]\x1b[0m Failed to attach: {e}\r\n')
+        await ws.close(code=1011)
+        return
+
     os.close(slave_fd)
 
     loop = asyncio.get_event_loop()
@@ -119,7 +152,6 @@ async def container_shell(ws: WebSocket, ct_id: str):
                 if 'bytes' in msg:
                     os.write(master_fd, msg['bytes'])
                 elif 'text' in msg:
-                    import json
                     try:
                         cmd = json.loads(msg['text'])
                         if cmd.get('type') == 'resize':
@@ -172,7 +204,6 @@ async def node_shell(ws: WebSocket, node_id: str):
         await ws.close(code=1011)
         return
 
-    # First message must be JSON credentials
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=20)
         creds = json.loads(raw)
