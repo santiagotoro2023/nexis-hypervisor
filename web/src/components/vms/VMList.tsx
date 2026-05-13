@@ -96,7 +96,12 @@ export function VMList() {
   function openContextMenu(e: React.MouseEvent, vm: ClusterVM) {
     e.preventDefault()
     e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY, vm })
+    // Clamp menu position so it never clips off screen edges
+    const menuW = 208 // w-52 = 13rem = ~208px
+    const menuH = 300 // approximate max height
+    const x = Math.min(e.clientX, window.innerWidth - menuW - 8)
+    const y = Math.min(e.clientY, window.innerHeight - menuH - 8)
+    setContextMenu({ x, y, vm })
   }
 
   const running = (vm: ClusterVM) => vm.status === 'running'
@@ -250,12 +255,12 @@ export function VMList() {
         </div>
       </div>
 
-      {/* Right-click context menu */}
+      {/* Right-click context menu — z-index 9999 so it renders above modals and overlays */}
       {contextMenu && (
         <div
           ref={menuRef}
-          className="fixed z-50 w-52 bg-nx-surface border border-nx-border rounded-lg shadow-xl py-1 text-xs"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed w-52 bg-nx-surface border border-nx-border rounded-lg shadow-xl py-1 text-xs"
+          style={{ left: contextMenu.x, top: contextMenu.y, zIndex: 9999 }}
         >
           <div className="px-3 py-2 border-b border-nx-border/50">
             <div className="font-mono text-nx-fg font-medium">{contextMenu.vm.name}</div>

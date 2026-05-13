@@ -16,7 +16,7 @@ export function NxModal({ title, onClose, children, width = 'max-w-lg' }: Props)
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" style={{ zIndex: 200 }}>
       <div className={`nx-card w-full ${width} shadow-2xl`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-nx-border">
           <h2 className="text-sm font-semibold text-nx-fg uppercase tracking-wider">{title}</h2>
@@ -24,7 +24,7 @@ export function NxModal({ title, onClose, children, width = 'max-w-lg' }: Props)
             <X size={16} />
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-4 max-h-[80vh] overflow-y-auto">{children}</div>
       </div>
     </div>
   )

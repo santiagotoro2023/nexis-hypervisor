@@ -3,6 +3,7 @@ NeXiS Hypervisor Daemon
 Entry point: TLS setup, auth middleware, route mounting, static file serving.
 """
 import os
+import re
 import ssl
 import ipaddress
 import secrets
@@ -33,6 +34,13 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+# Regex patterns for WebSocket endpoints that accept token via query param
+_WS_TOKEN_PATTERNS = [
+    re.compile(r'^/api/vms/[^/]+/console$'),
+    re.compile(r'^/api/containers/[^/]+/shell$'),
+    re.compile(r'^/api/nodes/[^/]+/shell$'),
+]
+
 
 @app.middleware('http')
 async def auth_middleware(request: Request, call_next):
@@ -46,12 +54,12 @@ async def auth_middleware(request: Request, call_next):
     if not path.startswith('/api/') or path in public_paths:
         return await call_next(request)
 
-    # WebSocket console: token via query param
+    # WebSocket endpoints: token may come via query param
     token = None
-    if path.startswith('/api/vms/') and path.endswith('/console'):
-        token = request.query_params.get('token')
-    elif path.startswith('/api/containers/') and path.endswith('/shell'):
-        token = request.query_params.get('token')
+    for pattern in _WS_TOKEN_PATTERNS:
+        if pattern.match(path):
+            token = request.query_params.get('token')
+            break
 
     if not token:
         auth_header = request.headers.get('Authorization', '')

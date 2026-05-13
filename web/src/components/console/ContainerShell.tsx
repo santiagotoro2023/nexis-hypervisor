@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, RefreshCw } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -10,6 +10,8 @@ export function ContainerShell() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const termRef = useRef<HTMLDivElement>(null)
+  const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
+  const reconnectRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     if (!termRef.current || !id) return
@@ -45,27 +47,76 @@ export function ContainerShell() {
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
     term.open(termRef.current)
-    fitAddon.fit()
+
+    // Defer fit() until after the element is rendered
+    requestAnimationFrame(() => fitAddon.fit())
 
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const token = sessionStorage.getItem('nx_token') ?? ''
-    const ws = new WebSocket(`${protocol}://${window.location.host}/api/containers/${id}/shell?token=${token}`)
-    ws.binaryType = 'arraybuffer'
+    const wsUrl = `${protocol}://${window.location.host}/api/containers/${encodeURIComponent(id)}/shell?token=${encodeURIComponent(token)}`
 
-    ws.onopen = () => term.write('\x1b[1;33m[nexis]\x1b[0m Connected to container shell\r\n')
-    ws.onmessage = (e) => term.write(new Uint8Array(e.data))
-    ws.onclose = () => term.write('\r\n\x1b[1;31m[nexis]\x1b[0m Connection closed\r\n')
+    let ws: WebSocket
+    let closed = false
 
-    term.onData(data => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
-    term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+    function connect() {
+      if (closed) return
+      ws = new WebSocket(wsUrl)
+      ws.binaryType = 'arraybuffer'
+
+      ws.onopen = () => {
+        setStatus('connected')
+        term.write('\x1b[1;33m[nexis]\x1b[0m Connected to container shell\r\n')
+        // Send initial terminal size
+        const msg = JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
+        ws.send(msg)
+      }
+
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(e.data))
+        } else if (typeof e.data === 'string') {
+          term.write(e.data)
+        }
+      }
+
+      ws.onclose = () => {
+        if (!closed) {
+          setStatus('disconnected')
+          term.write('\r\n\x1b[1;31m[nexis]\x1b[0m Connection closed\r\n')
+        }
+      }
+
+      ws.onerror = () => {
+        term.write('\r\n\x1b[1;31m[nexis]\x1b[0m WebSocket error\r\n')
+      }
+    }
+
+    connect()
+    reconnectRef.current = connect
+
+    // Send keypresses as binary for proper encoding
+    const dataDisposable = term.onData(data => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        // Send as binary ArrayBuffer for reliable PTY passthrough
+        const encoded = new TextEncoder().encode(data)
+        ws.send(encoded.buffer)
+      }
+    })
+
+    const resizeDisposable = term.onResize(({ cols, rows }) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
     })
 
     const resizeObserver = new ResizeObserver(() => fitAddon.fit())
-    resizeObserver.observe(termRef.current)
+    resizeObserver.observe(termRef.current!)
 
     return () => {
-      ws.close()
+      closed = true
+      dataDisposable.dispose()
+      resizeDisposable.dispose()
+      ws?.close()
       term.dispose()
       resizeObserver.disconnect()
     }
@@ -78,8 +129,23 @@ export function ContainerShell() {
           <ChevronLeft size={14} /> Back
         </button>
         <span className="text-xs text-nx-fg2 font-mono">Container Shell — {id}</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className={`w-1.5 h-1.5 rounded-full ${
+            status === 'connected' ? 'bg-nx-green animate-pulse' :
+            status === 'disconnected' ? 'bg-nx-red' : 'bg-nx-yellow animate-pulse'
+          }`} />
+          <span className="text-[10px] text-nx-fg2 tracking-widest uppercase">{status}</span>
+          {status === 'disconnected' && (
+            <button
+              className="nx-btn-ghost flex items-center gap-1 text-xs"
+              onClick={() => reconnectRef.current?.()}
+            >
+              <RefreshCw size={12} /> Reconnect
+            </button>
+          )}
+        </div>
       </div>
-      <div ref={termRef} className="flex-1" style={{ minHeight: 0, padding: '8px' }} />
+      <div ref={termRef} className="flex-1" style={{ minHeight: 0 }} />
     </div>
   )
 }

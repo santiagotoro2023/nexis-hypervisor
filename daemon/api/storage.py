@@ -22,7 +22,7 @@ ISO_DIR = config.ISO_DIR
 # Ensure ISO directory exists
 ISO_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── ISO Catalog ────────────────────────────────────────────────────────────────────────────────────
+# ── ISO Catalog ──────────────────────────────────────────────────────────────────────────────────────────
 
 ISO_CATALOG = [
     {'id': 'ubuntu-24.04-server',  'name': 'Ubuntu Server 24.04 LTS', 'version': '24.04.2', 'category': 'Linux',   'size_gb': 2.7,
@@ -66,13 +66,51 @@ class FetchRequest(BaseModel):
 class AddPoolRequest(BaseModel):
     name: str
     type: str = 'local'   # 'local' | 'nfs'
-    path: str
+    path: str = ''
     server: str = ''       # NFS only
     share: str = ''        # NFS only
     options: str = ''
 
 
-# ── Storage pools ───────────────────────────────────────────────────────────────────────────────────────────
+class FsPathRequest(BaseModel):
+    path: str
+
+
+class FsRenameRequest(BaseModel):
+    src: str
+    dst: str
+
+
+class FsCopyRequest(BaseModel):
+    src: str
+    dst: str
+
+
+# ── Allowed path helper ──────────────────────────────────────────────────────
+
+def _allowed_paths() -> list[str]:
+    """Return list of real paths that FS operations are permitted within."""
+    paths = [str(ISO_DIR)]
+    # Add user-defined pool paths
+    for p in _db_pools():
+        paths.append(p['path'])
+    # Add builtin pool paths
+    for p in _builtin_pools():
+        paths.append(p['path'])
+    return paths
+
+
+def _assert_allowed(path: str) -> str:
+    """Resolve path and raise 403 if it escapes allowed roots. Returns real path."""
+    real = os.path.realpath(path)
+    allowed = _allowed_paths()
+    if not any(real == os.path.realpath(a) or real.startswith(os.path.realpath(a) + os.sep)
+               for a in allowed):
+        raise HTTPException(403, 'Path is outside allowed storage pools.')
+    return real
+
+
+# ── Storage pools ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _pool_disk_info(path: str) -> dict:
     try:
@@ -179,7 +217,7 @@ def remove_pool(pool_id: str):
     return {'ok': True}
 
 
-# ── ISO management ────────────────────────────────────────────────────────────────────────────────────────
+# ── ISO management ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _downloaded_isos() -> set[str]:
     try:
@@ -306,7 +344,8 @@ def browse_storage(path: str = ''):
         path = str(ISO_DIR)
 
     real = os.path.realpath(path)
-    if not any(real.startswith(os.path.realpath(p)) for p in all_paths):
+    if not any(real == os.path.realpath(p) or real.startswith(os.path.realpath(p) + os.sep)
+               for p in all_paths):
         raise HTTPException(403, 'Path is outside allowed storage pools.')
 
     if not os.path.isdir(real):
@@ -327,10 +366,91 @@ def browse_storage(path: str = ''):
         raise HTTPException(403, 'Permission denied.')
 
     parent = str(Path(real).parent) if real != '/' else None
-    if parent and not any(parent.startswith(os.path.realpath(p)) for p in all_paths):
+    if parent and not any(
+        os.path.realpath(parent) == os.path.realpath(p) or
+        os.path.realpath(parent).startswith(os.path.realpath(p) + os.sep)
+        for p in all_paths
+    ):
         parent = None
 
     return {'path': real, 'parent': parent, 'entries': entries}
+
+
+# ── Filesystem CRUD operations ────────────────────────────────────────────────
+
+@router.post('/fs/mkdir')
+def fs_mkdir(req: FsPathRequest):
+    """Create a new directory inside allowed storage pools."""
+    real = _assert_allowed(req.path)
+    if os.path.exists(real):
+        raise HTTPException(409, 'Path already exists.')
+    try:
+        os.makedirs(real, exist_ok=False)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    db.log_action('storage.fs.mkdir', real)
+    return {'ok': True, 'path': real}
+
+
+@router.post('/fs/delete')
+def fs_delete(req: FsPathRequest):
+    """Delete a file or directory (recursively) inside allowed storage pools."""
+    real = _assert_allowed(req.path)
+    if not os.path.exists(real):
+        raise HTTPException(404, 'Path not found.')
+    try:
+        if os.path.isdir(real):
+            shutil.rmtree(real)
+        else:
+            os.unlink(real)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    db.log_action('storage.fs.delete', real)
+    return {'ok': True}
+
+
+@router.post('/fs/rename')
+def fs_rename(req: FsRenameRequest):
+    """Rename/move a file or directory within allowed storage pools."""
+    src_real = _assert_allowed(req.src)
+    # For dst, we check the parent directory is allowed (the dst itself may not exist yet)
+    dst_parent = os.path.dirname(req.dst)
+    _assert_allowed(dst_parent)
+    dst_real = os.path.realpath(req.dst)
+
+    if not os.path.exists(src_real):
+        raise HTTPException(404, 'Source not found.')
+    if os.path.exists(dst_real):
+        raise HTTPException(409, 'Destination already exists.')
+    try:
+        shutil.move(src_real, dst_real)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    db.log_action('storage.fs.rename', f'{src_real} -> {dst_real}')
+    return {'ok': True}
+
+
+@router.post('/fs/copy')
+def fs_copy(req: FsCopyRequest):
+    """Copy a file or directory within allowed storage pools."""
+    src_real = _assert_allowed(req.src)
+    dst_parent = os.path.dirname(req.dst)
+    _assert_allowed(dst_parent)
+    dst_real = os.path.realpath(req.dst)
+
+    if not os.path.exists(src_real):
+        raise HTTPException(404, 'Source not found.')
+    if os.path.exists(dst_real):
+        raise HTTPException(409, 'Destination already exists.')
+    try:
+        if os.path.isdir(src_real):
+            shutil.copytree(src_real, dst_real)
+        else:
+            shutil.copy2(src_real, dst_real)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    db.log_action('storage.fs.copy', f'{src_real} -> {dst_real}')
+    return {'ok': True}
 
 
 @router.delete('/isos/{name}')

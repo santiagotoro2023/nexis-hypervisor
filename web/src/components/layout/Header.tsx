@@ -1,9 +1,8 @@
-import { Bell, Wifi, AlertCircle } from 'lucide-react'
+import { Wifi } from 'lucide-react'
 import { useMetrics } from '../../hooks/useMetrics'
 
 export function Header({ title }: { title: string }) {
   const m = useMetrics()
-  const critical = m.cpu_percent > 90 || m.memory_percent > 90
 
   return (
     <header className="h-12 flex items-center justify-between px-6 bg-nx-bg2 border-b border-nx-border shrink-0">
@@ -27,9 +26,6 @@ export function Header({ title }: { title: string }) {
             </span>
           </span>
         </div>
-        <button className={`transition-colors relative ${critical ? 'text-nx-red animate-pulse' : 'text-nx-fg2 hover:text-nx-fg'}`}>
-          {critical ? <AlertCircle size={15} strokeWidth={1.8} /> : <Bell size={15} strokeWidth={1.8} />}
-        </button>
       </div>
     </header>
   )

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Trash2, HardDrive, FolderOpen, Download, Plus, X, Globe, CheckCircle, AlertCircle, ChevronRight, Folder, File, ArrowLeft } from 'lucide-react'
+import { Upload, Trash2, HardDrive, FolderOpen, Download, Plus, X, Globe, CheckCircle,
+         AlertCircle, ChevronRight, Folder, File, ArrowLeft, FolderPlus, Edit2, Move } from 'lucide-react'
 import { AppLayout } from '../layout/AppLayout'
 import { NxSpinner } from '../common/NxSpinner'
 import { NxGauge } from '../common/NxGauge'
@@ -49,7 +50,11 @@ interface CatalogItem {
   downloaded: boolean
 }
 
-type DownloadState = { progress: number; downloaded_mb: number; total_mb: number } | { done: boolean; name: string } | { error: string } | null
+type DownloadState =
+  | { progress: number; downloaded_mb: number; total_mb: number }
+  | { done: boolean; name: string }
+  | { error: string }
+  | null
 
 export function Storage() {
   const [pools, setPools] = useState<Pool[]>([])
@@ -63,15 +68,17 @@ export function Storage() {
   const [browsePath, setBrowsePath] = useState<string | null>(null)
   const [downloading, setDownloading] = useState<Record<string, DownloadState>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  // Track active abort controllers keyed by catalog item id
+  const abortRefs = useRef<Record<string, AbortController>>({})
 
-  const fetch = () =>
+  const fetchData = () =>
     Promise.all([
       api.get<Pool[]>('/storage/pools').then(setPools),
       api.get<ISOFile[]>('/storage/isos/list').then(setIsos),
       api.get<CatalogItem[]>('/storage/catalog').then(setCatalog),
     ]).finally(() => setLoading(false))
 
-  useEffect(() => { fetch() }, [])
+  useEffect(() => { fetchData() }, [])
 
   async function uploadISO(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -81,25 +88,36 @@ export function Storage() {
     form.append('file', file)
     try { await api.postForm('/storage/isos/upload', form) } finally {
       setUploading(false)
-      fetch()
+      fetchData()
+      // Reset file input so the same file can be re-selected
+      if (fileRef.current) fileRef.current.value = ''
     }
   }
 
   async function deleteISO(name: string) {
     if (!confirm(`Delete ISO "${name}"?`)) return
     await api.delete(`/storage/isos/${encodeURIComponent(name)}`)
-    fetch()
+    fetchData()
   }
 
   async function removePool(id: string) {
     if (!confirm('Remove this storage pool?')) return
     await api.delete(`/storage/pools/${id}`)
-    fetch()
+    fetchData()
   }
 
   async function downloadFromCatalog(item: CatalogItem) {
     if (!item.url) return
     const key = item.id
+
+    // Cancel any existing download for this item
+    if (abortRefs.current[key]) {
+      abortRefs.current[key].abort()
+    }
+
+    const controller = new AbortController()
+    abortRefs.current[key] = controller
+
     setDownloading(d => ({ ...d, [key]: { progress: 0, downloaded_mb: 0, total_mb: item.size_gb * 1024 } }))
 
     const token = sessionStorage.getItem('nx_token')
@@ -111,36 +129,55 @@ export function Storage() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ url: item.url, filename: item.filename }),
+        signal: controller.signal,
       })
 
-      const reader = res.body!.getReader()
+      if (!res.ok || !res.body) {
+        const msg = await res.text().catch(() => 'Unknown error')
+        setDownloading(d => ({ ...d, [key]: { error: msg } }))
+        return
+      }
+
+      const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
 
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         buf += decoder.decode(value, { stream: true })
-        const parts = buf.split('\n\n')
-        buf = parts.pop() ?? ''
-        for (const part of parts) {
-          for (const line of part.split('\n')) {
+        // SSE events are separated by double newlines
+        const events = buf.split('\n\n')
+        buf = events.pop() ?? ''
+        for (const event of events) {
+          for (const line of event.split('\n')) {
             if (!line.startsWith('data: ')) continue
             try {
               const ev = JSON.parse(line.slice(6))
               setDownloading(d => ({ ...d, [key]: ev }))
-            } catch { /* skip */ }
+            } catch { /* skip malformed */ }
           }
         }
       }
     } catch (e) {
-      setDownloading(d => ({ ...d, [key]: { error: (e as Error).message } }))
+      if ((e as Error).name !== 'AbortError') {
+        setDownloading(d => ({ ...d, [key]: { error: (e as Error).message } }))
+      }
+    } finally {
+      delete abortRefs.current[key]
     }
 
     setTimeout(() => {
       setDownloading(d => { const n = { ...d }; delete n[key]; return n })
-      fetch()
+      fetchData()
     }, 3000)
+  }
+
+  function cancelDownload(key: string) {
+    abortRefs.current[key]?.abort()
+    delete abortRefs.current[key]
+    setDownloading(d => { const n = { ...d }; delete n[key]; return n })
   }
 
   const categories = [...new Set(catalog.map(c => c.category))]
@@ -269,7 +306,7 @@ export function Storage() {
 
       {/* Add Pool Modal */}
       {showAddPool && (
-        <AddPoolModal onClose={() => setShowAddPool(false)} onAdded={() => { setShowAddPool(false); fetch() }} />
+        <AddPoolModal onClose={() => setShowAddPool(false)} onAdded={() => { setShowAddPool(false); fetchData() }} />
       )}
 
       {/* Storage Browser Modal */}
@@ -325,7 +362,17 @@ export function Storage() {
                               {item.downloaded ? 'Re-download' : 'Download'}
                             </button>
                           )}
-                          {inProgress && <NxSpinner size={14} />}
+                          {inProgress && (
+                            <>
+                              <NxSpinner size={14} />
+                              <button
+                                className="nx-btn-ghost flex items-center gap-1 text-xs text-nx-red"
+                                onClick={() => cancelDownload(item.id)}
+                              >
+                                <X size={11} /> Cancel
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     )
@@ -346,6 +393,15 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
   const [browse, setBrowse] = useState<BrowseResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [clipboard, setClipboard] = useState<{ path: string; name: string; op: 'copy' | 'move' } | null>(null)
+  const [showNewFolder, setShowNewFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [showRename, setShowRename] = useState<BrowseEntry | null>(null)
+  const [renameName, setRenameName] = useState('')
+  const [actionLoading, setActionLoading] = useState(false)
+  // Context menu for entries
+  const [entryMenu, setEntryMenu] = useState<{ entry: BrowseEntry; x: number; y: number } | null>(null)
+  const entryMenuRef = useRef<HTMLDivElement>(null)
 
   async function navigate(p: string) {
     setLoading(true)
@@ -362,6 +418,19 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
 
   useEffect(() => { navigate(path) }, [path])
 
+  // Close entry context menu on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (entryMenuRef.current && !entryMenuRef.current.contains(e.target as Node)) {
+        setEntryMenu(null)
+      }
+    }
+    if (entryMenu) {
+      document.addEventListener('mousedown', handler)
+      return () => document.removeEventListener('mousedown', handler)
+    }
+  }, [entryMenu])
+
   function formatSize(bytes: number) {
     if (bytes === 0) return '—'
     if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
@@ -369,7 +438,83 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
     return `${(bytes / 1024).toFixed(1)} KB`
   }
 
-  const pathParts = (browse?.path ?? path).split('/').filter(Boolean)
+  const currentPath = browse?.path ?? path
+  const pathParts = currentPath.split('/').filter(Boolean)
+
+  async function createFolder() {
+    if (!newFolderName.trim() || !browse) return
+    setActionLoading(true)
+    try {
+      await api.post('/storage/fs/mkdir', { path: `${browse.path}/${newFolderName.trim()}` })
+      setShowNewFolder(false)
+      setNewFolderName('')
+      navigate(browse.path)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function deleteEntry(entry: BrowseEntry) {
+    if (!browse) return
+    const label = entry.type === 'directory' ? `folder "${entry.name}" and all its contents` : `file "${entry.name}"`
+    if (!confirm(`Permanently delete ${label}?`)) return
+    setActionLoading(true)
+    try {
+      await api.post('/storage/fs/delete', { path: `${browse.path}/${entry.name}` })
+      navigate(browse.path)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function renameEntry() {
+    if (!showRename || !renameName.trim() || !browse) return
+    setActionLoading(true)
+    try {
+      await api.post('/storage/fs/rename', {
+        src: `${browse.path}/${showRename.name}`,
+        dst: `${browse.path}/${renameName.trim()}`,
+      })
+      setShowRename(null)
+      setRenameName('')
+      navigate(browse.path)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function pasteEntry() {
+    if (!clipboard || !browse) return
+    setActionLoading(true)
+    try {
+      const dst = `${browse.path}/${clipboard.name}`
+      if (clipboard.op === 'move') {
+        await api.post('/storage/fs/rename', { src: clipboard.path, dst })
+      } else {
+        await api.post('/storage/fs/copy', { src: clipboard.path, dst })
+      }
+      setClipboard(null)
+      navigate(browse.path)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  function openEntryMenu(e: React.MouseEvent, entry: BrowseEntry) {
+    e.preventDefault()
+    e.stopPropagation()
+    const x = Math.min(e.clientX, window.innerWidth - 180)
+    const y = Math.min(e.clientY, window.innerHeight - 200)
+    setEntryMenu({ entry, x, y })
+  }
 
   return (
     <NxModal title="Storage Browser" onClose={onClose} width="max-w-3xl">
@@ -388,14 +533,64 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
           })}
         </div>
 
-        {/* Back button */}
-        {browse?.parent && (
+        {/* Toolbar */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {browse?.parent && (
+            <button
+              className="flex items-center gap-1.5 text-xs text-nx-fg2 hover:text-nx-fg transition-colors"
+              onClick={() => navigate(browse.parent!)}
+            >
+              <ArrowLeft size={12} /> Parent
+            </button>
+          )}
           <button
-            className="flex items-center gap-1.5 text-xs text-nx-fg2 hover:text-nx-fg transition-colors"
-            onClick={() => navigate(browse.parent!)}
+            className="flex items-center gap-1.5 text-xs nx-btn-ghost"
+            onClick={() => { setShowNewFolder(true); setNewFolderName('') }}
           >
-            <ArrowLeft size={12} /> Parent directory
+            <FolderPlus size={12} /> New Folder
           </button>
+          {clipboard && (
+            <button
+              className="flex items-center gap-1.5 text-xs nx-btn-ghost text-nx-orange"
+              onClick={pasteEntry}
+              disabled={actionLoading}
+            >
+              <Move size={12} /> Paste {clipboard.op === 'move' ? '(Move)' : '(Copy)'}: {clipboard.name}
+            </button>
+          )}
+          {actionLoading && <NxSpinner size={14} />}
+        </div>
+
+        {/* New folder form */}
+        {showNewFolder && (
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              className="nx-input text-xs flex-1"
+              placeholder="Folder name"
+              value={newFolderName}
+              onChange={e => setNewFolderName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createFolder(); if (e.key === 'Escape') setShowNewFolder(false) }}
+            />
+            <button className="nx-btn-primary text-xs" onClick={createFolder} disabled={!newFolderName.trim() || actionLoading}>Create</button>
+            <button className="nx-btn-ghost text-xs" onClick={() => setShowNewFolder(false)}>Cancel</button>
+          </div>
+        )}
+
+        {/* Rename form */}
+        {showRename && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-nx-fg2">Rename "{showRename.name}" to:</span>
+            <input
+              autoFocus
+              className="nx-input text-xs flex-1"
+              value={renameName}
+              onChange={e => setRenameName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') renameEntry(); if (e.key === 'Escape') setShowRename(null) }}
+            />
+            <button className="nx-btn-primary text-xs" onClick={renameEntry} disabled={!renameName.trim() || actionLoading}>Rename</button>
+            <button className="nx-btn-ghost text-xs" onClick={() => setShowRename(null)}>Cancel</button>
+          </div>
         )}
 
         {loading && <div className="flex items-center justify-center py-10"><NxSpinner size={24} /></div>}
@@ -412,11 +607,16 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
                     <th className="text-left px-5 py-3">Name</th>
                     <th className="text-left px-4 py-3">Size</th>
                     <th className="text-left px-4 py-3">Modified</th>
+                    <th className="text-right px-4 py-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {browse.entries.map(entry => (
-                    <tr key={entry.name} className="border-b border-nx-border/50 hover:bg-nx-dim/30 transition-colors">
+                    <tr
+                      key={entry.name}
+                      className="border-b border-nx-border/50 hover:bg-nx-dim/30 transition-colors"
+                      onContextMenu={e => openEntryMenu(e, entry)}
+                    >
                       <td className="px-5 py-2.5">
                         {entry.type === 'directory' ? (
                           <button
@@ -439,6 +639,34 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
                       <td className="px-4 py-2.5 text-xs text-nx-fg2">
                         {new Date(entry.modified).toLocaleDateString()}
                       </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            className="nx-btn-ghost p-1" title="Rename"
+                            onClick={() => { setShowRename(entry); setRenameName(entry.name) }}
+                          >
+                            <Edit2 size={11} />
+                          </button>
+                          <button
+                            className="nx-btn-ghost p-1" title="Copy"
+                            onClick={() => setClipboard({ path: `${browse.path}/${entry.name}`, name: entry.name, op: 'copy' })}
+                          >
+                            <File size={11} />
+                          </button>
+                          <button
+                            className="nx-btn-ghost p-1" title="Cut (Move)"
+                            onClick={() => setClipboard({ path: `${browse.path}/${entry.name}`, name: entry.name, op: 'move' })}
+                          >
+                            <Move size={11} />
+                          </button>
+                          <button
+                            className="nx-btn-ghost p-1 text-nx-red/70 hover:text-nx-red" title="Delete"
+                            onClick={() => deleteEntry(entry)}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -447,6 +675,42 @@ function StorageBrowser({ path, onClose }: { path: string; onClose: () => void }
           </div>
         )}
       </div>
+
+      {/* Entry right-click context menu */}
+      {entryMenu && (
+        <div
+          ref={entryMenuRef}
+          className="fixed bg-nx-surface border border-nx-border rounded-lg shadow-xl py-1 text-xs w-44"
+          style={{ left: entryMenu.x, top: entryMenu.y, zIndex: 9999 }}
+        >
+          <div className="px-3 py-1.5 border-b border-nx-border/50 text-nx-fg font-mono text-[10px] truncate">
+            {entryMenu.entry.name}
+          </div>
+          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-nx-fg2 hover:bg-nx-dim hover:text-nx-fg"
+            onClick={() => { setShowRename(entryMenu.entry); setRenameName(entryMenu.entry.name); setEntryMenu(null) }}>
+            <Edit2 size={11} /> Rename
+          </button>
+          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-nx-fg2 hover:bg-nx-dim hover:text-nx-fg"
+            onClick={() => {
+              setClipboard({ path: `${browse!.path}/${entryMenu.entry.name}`, name: entryMenu.entry.name, op: 'copy' })
+              setEntryMenu(null)
+            }}>
+            <File size={11} /> Copy
+          </button>
+          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-nx-fg2 hover:bg-nx-dim hover:text-nx-fg"
+            onClick={() => {
+              setClipboard({ path: `${browse!.path}/${entryMenu.entry.name}`, name: entryMenu.entry.name, op: 'move' })
+              setEntryMenu(null)
+            }}>
+            <Move size={11} /> Cut (Move)
+          </button>
+          <div className="border-t border-nx-border/30 mt-1 pt-1" />
+          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-nx-red hover:bg-nx-red/10"
+            onClick={() => { deleteEntry(entryMenu.entry); setEntryMenu(null) }}>
+            <Trash2 size={11} /> Delete
+          </button>
+        </div>
+      )}
     </NxModal>
   )
 }

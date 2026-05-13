@@ -11,6 +11,7 @@ export function VMConsole() {
   const [connected, setConnected] = useState(false)
   const [clipText, setClipText] = useState('')
   const [showClip, setShowClip] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const sendClipboard = useCallback(() => {
     if (rfbRef.current && clipText) {
@@ -33,41 +34,69 @@ export function VMConsole() {
 
     const token = sessionStorage.getItem('nx_token') ?? ''
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${protocol}://${window.location.host}/api/vms/${id}/console?token=${token}`
+    const wsUrl = `${protocol}://${window.location.host}/api/vms/${encodeURIComponent(id)}/console?token=${encodeURIComponent(token)}`
 
-    let rfb: unknown
-    const script = document.createElement('script')
-    script.src = '/novnc/core/rfb.js'
-    script.type = 'module'
+    let rfb: unknown = null
+    let cancelled = false
 
-    script.onload = () => {
-      if (!containerRef.current) return
+    // Try dynamic ES module import first (works when noVNC is installed as ES module)
+    // Fall back to checking window.RFB (UMD/legacy build)
+    async function initRFB() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const RFB = (window as any).RFB
-      if (!RFB) return
+      let RFB: any = null
 
-      rfb = new RFB(containerRef.current, wsUrl)
-      rfbRef.current = rfb
+      // Attempt 1: dynamic import of the ES module version
+      try {
+        const mod = await import(/* @vite-ignore */ '/novnc/core/rfb.js')
+        RFB = mod.default ?? mod
+      } catch {
+        // Attempt 2: check if a UMD build already put RFB on window
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        RFB = (window as any).RFB
+      }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const r = rfb as any
-      r.viewOnly = false
-      r.scaleViewport = true
-      r.resizeSession = true
+      if (!RFB) {
+        setError('noVNC library not found. Ensure noVNC is installed at /usr/share/novnc on the server.')
+        return
+      }
 
-      r.addEventListener('connect', () => setConnected(true))
-      r.addEventListener('disconnect', () => setConnected(false))
+      if (cancelled || !containerRef.current) return
 
-      // Sync clipboard from VM → browser
-      r.addEventListener('clipboard', (e: { detail: { text: string } }) => {
-        navigator.clipboard.writeText(e.detail.text).catch(() => {
-          setClipText(e.detail.text)
-          setShowClip(true)
+      try {
+        rfb = new RFB(containerRef.current, wsUrl)
+        rfbRef.current = rfb
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const r = rfb as any
+        r.viewOnly = false
+        r.scaleViewport = true
+        r.resizeSession = true
+
+        r.addEventListener('connect', () => {
+          if (!cancelled) setConnected(true)
         })
-      })
+        r.addEventListener('disconnect', (e: { detail: { clean: boolean } }) => {
+          if (!cancelled) {
+            setConnected(false)
+            if (!e.detail.clean) {
+              setError('VNC disconnected unexpectedly. Is the VM running?')
+            }
+          }
+        })
+
+        // Sync clipboard from VM → browser
+        r.addEventListener('clipboard', (e: { detail: { text: string } }) => {
+          navigator.clipboard.writeText(e.detail.text).catch(() => {
+            setClipText(e.detail.text)
+            setShowClip(true)
+          })
+        })
+      } catch (err) {
+        setError(`Failed to initialize VNC: ${(err as Error).message}`)
+      }
     }
 
-    document.head.appendChild(script)
+    initRFB()
 
     // Keyboard shortcut: Ctrl+Alt+V pastes clipboard into VM
     const handleKey = (e: KeyboardEvent) => {
@@ -79,10 +108,11 @@ export function VMConsole() {
     window.addEventListener('keydown', handleKey)
 
     return () => {
-      document.head.removeChild(script)
+      cancelled = true
       window.removeEventListener('keydown', handleKey)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (rfbRef.current) (rfbRef.current as any).disconnect?.()
+      rfbRef.current = null
     }
   }, [id, readClipboard])
 
@@ -140,12 +170,19 @@ export function VMConsole() {
         </div>
       </div>
 
+      {/* Error banner */}
+      {error && (
+        <div className="shrink-0 px-4 py-2 bg-nx-red/10 border-b border-nx-red/30 text-nx-red text-xs font-mono">
+          {error}
+        </div>
+      )}
+
       {/* Console viewport */}
       <div ref={containerRef} className="flex-1 bg-black" style={{ minHeight: 0 }} />
 
       {/* Clipboard fallback overlay */}
       {showClip && (
-        <div className="absolute bottom-16 right-4 w-80 nx-card p-4 space-y-3 shadow-2xl">
+        <div className="absolute bottom-16 right-4 w-80 nx-card p-4 space-y-3 shadow-2xl" style={{ zIndex: 9999 }}>
           <div className="flex items-center gap-2">
             <Clipboard size={13} className="text-nx-orange" />
             <span className="text-[10px] text-nx-fg2 tracking-widest uppercase">Clipboard Relay</span>
